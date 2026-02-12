@@ -1,0 +1,36 @@
+services:
+  obsidian:
+    image: ghcr.io/cameronsjo/obsidian-headless:latest
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - obsidian-config:/config
+      - ${VAULT_PATH:-.}/vault:/config/vaults/default
+
+  backup:
+    image: ghcr.io/cameronsjo/obsidian-vault-backup:latest
+    restart: unless-stopped
+    environment:
+      VAULT_PATH: /vault
+      DEBOUNCE_SECONDS: ${BACKUP_DEBOUNCE:-300}
+      GIT_USER_NAME: ${GIT_USER_NAME:-Obsidian Backup}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-backup@local}
+      # Optional: restic offsite backup
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      # Optional: AI commit messages
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      # Optional: Discord notifications
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    volumes:
+      - ${VAULT_PATH:-.}/vault:/vault
+
+  # Optional: MCP server for AI agent access
+  # obsidi-claude:
+  #   image: ghcr.io/cameronsjo/obsidi-claude:latest
+  #   ...
+
+volumes:
+  obsidian-config:
