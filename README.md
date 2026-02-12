@@ -40,24 +40,28 @@ After the first boot, enable Obsidian Sync to pull your vault:
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph stack["docker compose up"]
+        direction LR
+        subgraph obsidian["obsidian"]
+            o1["Xvfb + App"]
+            o2["Obsidian Sync"]
+            o3["CLI ready"]
+        end
+        subgraph backup["backup"]
+            b1["inotify watcher"]
+            b2["Git auto-commit"]
+            b3["Restic encrypted"]
+            b4["AI commit msgs"]
+        end
+    end
+    vault[("Shared vault volume")]
+    obsidian --> vault
+    backup --> vault
 ```
-                    docker compose up
-                          |
-          +---------------+---------------+
-          |                               |
-  +-----------------+          +--------------------+
-  |    obsidian     |          |       backup       |
-  |                 |          |                    |
-  |  Xvfb + App    |          |  inotify watcher   |
-  |  Obsidian Sync |          |  Git auto-commit   |
-  |  CLI ready     |          |  Restic encrypted   |
-  +--------+--------+          |  AI commit msgs    |
-           |                   +----------+---------+
-           v                              v
-  +------------------------------------------------+
-  |            Shared vault volume                  |
-  +------------------------------------------------+
-```
+
+See [docs/architecture.md](docs/architecture.md) for detailed diagrams including data flow and the compounding capabilities model.
 
 ## Components
 
