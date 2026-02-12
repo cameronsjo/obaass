@@ -1,4 +1,4 @@
-# OBaaS — Obsidian-as-a-Service
+# OBaaSS — Obsidian As-a Safe-ish Service
 
 Run Obsidian headlessly on a server. One `docker compose up` gives you three compounding capabilities:
 
@@ -10,7 +10,7 @@ Run Obsidian headlessly on a server. One `docker compose up` gives you three com
 
 Obsidian is a desktop app. No server mode. No native API. Sync is built into the desktop client. Every feature assumes a human sitting at a screen.
 
-OBaaS solves this by running the desktop app headlessly on a server. That single decision unlocks capabilities Obsidian was never designed to support — and they compound:
+OBaaSS solves this by running the desktop app headlessly on a server. That single decision unlocks capabilities Obsidian was never designed to support — and they compound:
 
 - AI writes a note via MCP -> Sync propagates to all devices -> Backup captures the change
 - Phone edit via Sync -> Server receives it -> Backup captures it -> AI can read it via MCP
@@ -21,8 +21,8 @@ Your vault becomes a **living, distributed knowledge base** accessible from any 
 ## Quick Start
 
 ```bash
-git clone https://github.com/cameronsjo/obaas.git
-cd obaas
+git clone https://github.com/cameronsjo/obaass.git
+cd obaass
 cp .env.example .env
 # Edit .env with your settings
 
