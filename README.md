@@ -129,4 +129,4 @@ Retention policy: 7 daily, 4 weekly, 12 monthly snapshots.
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires a separate license — [get in touch](https://github.com/cameronsjo).
