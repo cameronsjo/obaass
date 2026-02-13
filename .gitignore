@@ -10,3 +10,6 @@ Thumbs.db
 # Runtime
 .env
 vault/
+
+# Claude Code local settings (contains API keys)
+.claude/settings.local.json

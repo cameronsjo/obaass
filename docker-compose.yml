@@ -1,6 +1,6 @@
 services:
   obsidian:
-    image: ghcr.io/cameronsjo/obsidian-headless:latest
+    image: ghcr.io/cameronsjo/obsidi-headless:latest
     restart: unless-stopped
     environment:
       TZ: ${TZ:-UTC}
@@ -9,7 +9,7 @@ services:
       - ${VAULT_PATH:-.}/vault:/config/vaults/default
 
   backup:
-    image: ghcr.io/cameronsjo/obsidian-vault-backup:latest
+    image: ghcr.io/cameronsjo/obsidi-backup:latest
     restart: unless-stopped
     environment:
       VAULT_PATH: /vault
@@ -27,10 +27,9 @@ services:
     volumes:
       - ${VAULT_PATH:-.}/vault:/vault
 
-  # Optional: MCP server for AI agent access
-  # obsidi-claude:
-  #   image: ghcr.io/cameronsjo/obsidi-claude:latest
-  #   ...
+  # Optional: Install obsidi-mcp plugin into the obsidian container
+  # for AI agent access via MCP (Claude, etc.)
+  # See: https://github.com/cameronsjo/obsidi-mcp
 
 volumes:
   obsidian-config:
