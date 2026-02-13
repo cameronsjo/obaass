@@ -159,8 +159,6 @@ All configuration is via environment variables in `.env`. See [.env.example](.en
 
 ## How It Works
 
-![The pipeline — raw plans refined into living systems across three workshop floors](prompts/homelab-architecture.png)
-
 ### obsidi-headless
 
 The [`obsidi-headless`](https://github.com/cameronsjo/obsidi-headless) image runs the Obsidian desktop app with a virtual framebuffer (Xvfb) instead of a real display. Electron needs a display server — Xvfb satisfies that requirement with zero overhead. No VNC, no desktop environment, no window manager.
