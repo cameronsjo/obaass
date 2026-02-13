@@ -22,7 +22,7 @@ obaass runs the desktop app headlessly on a server. That single decision unlocks
 
 Your vault becomes a **living, distributed knowledge base** accessible from any device, any AI agent, and recoverable from any point in time.
 
-## the safe-ish stack
+## How It Works
 
 ![OBaaSS system architecture — clients, sync cloud, auth layer, server stack, and offsite storage](prompts/obaass-architecture.png)
 
@@ -74,11 +74,30 @@ graph TB
 
 </details>
 
-See [docs/architecture.md](docs/architecture.md) for the detailed backup pipeline, data flow sequences, and the compounding capabilities model.
+### obsidi-headless
 
-## Components
+The [`obsidi-headless`](https://github.com/cameronsjo/obsidi-headless) image runs the Obsidian desktop app with a virtual framebuffer (Xvfb) instead of a real display. Electron needs a display server — Xvfb satisfies that requirement with zero overhead. No VNC, no desktop environment, no window manager.
 
-The `obsidi-*` ecosystem:
+Obsidian Sync runs inside the app, keeping the server-side vault in sync with all your devices. The native CLI (Obsidian 1.12+) provides programmatic access.
+
+### obsidi-backup
+
+The [`obsidi-backup`](https://github.com/cameronsjo/obsidi-backup) sidecar watches the vault directory for filesystem changes using inotify. After a configurable debounce period (default: 5 minutes), it:
+
+1. Commits changes to git with an AI-generated message describing what changed (or falls back to a timestamp)
+2. Encrypts and deduplicates to offsite storage via restic
+3. Prunes old snapshots per retention policy (7 daily, 4 weekly, 12 monthly)
+4. Notifies via Discord, Slack, or generic webhook
+
+### obsidi-mcp
+
+An Obsidian community plugin that runs inside the headless container, exposing vault operations as MCP tools. AI agents (Claude.ai, obsidi-claude, or any MCP client) connect through your auth/ingress layer to read and write notes, search, manage tags, and more. See [docs/mcp-integration.md](docs/mcp-integration.md) for the full setup guide.
+
+### obsidi-claude
+
+A chatbot-style UI plugin for the desktop Obsidian app. It connects to the server's obsidi-mcp over the network — so you can chat with your vault from your laptop while the server handles the heavy lifting, backup, and sync.
+
+### Components
 
 | Component | Type | Purpose |
 |-----------|------|---------|
@@ -89,7 +108,7 @@ The `obsidi-*` ecosystem:
 
 **obsidi-headless** and **obsidi-backup** run on the server as Docker containers. **obsidi-mcp** is an Obsidian plugin installed inside the headless container. **obsidi-claude** is an Obsidian plugin for your desktop/laptop — it connects to the server through your auth layer.
 
-See [docs/mcp-integration.md](docs/mcp-integration.md) for the full MCP setup guide (auth layer, Agentgateway, connecting Claude).
+See [docs/architecture.md](docs/architecture.md) for the detailed backup pipeline, data flow sequences, and the compounding capabilities model.
 
 ## Quick Start
 
@@ -118,18 +137,19 @@ After the first boot, enable Obsidian Sync to pull your vault:
 2. Use the CLI to configure sync (see [docs/sync-setup.md](docs/sync-setup.md))
 3. Once authenticated, Sync runs automatically on every restart
 
-## Configuration
+<details>
+<summary>Configuration</summary>
 
 All configuration is via environment variables in `.env`. See [.env.example](.env.example) for the full list.
 
-### Core
+#### Core
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VAULT_PATH` | `.` | Directory containing your `vault/` folder |
 | `TZ` | `UTC` | Timezone |
 
-### Backup
+#### Backup
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -137,50 +157,27 @@ All configuration is via environment variables in `.env`. See [.env.example](.en
 | `GIT_USER_NAME` | `Obsidian Backup` | Git author name |
 | `GIT_USER_EMAIL` | `backup@local` | Git author email |
 
-### Offsite Backup
+#### Offsite Backup
 
 | Variable | Description |
 |----------|-------------|
 | `RESTIC_REPOSITORY` | Restic repo URL (S3, Azure, B2, local path) |
 | `RESTIC_PASSWORD` | Encryption password for the restic repository |
 
-### AI Commit Messages
+#### AI Commit Messages
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | — | Anthropic API key for AI-generated commit messages |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | Model to use |
 
-### Notifications
+#### Notifications
 
 | Variable | Description |
 |----------|-------------|
 | `DISCORD_WEBHOOK_URL` | Discord webhook for backup notifications |
 
-## How It Works
-
-### obsidi-headless
-
-The [`obsidi-headless`](https://github.com/cameronsjo/obsidi-headless) image runs the Obsidian desktop app with a virtual framebuffer (Xvfb) instead of a real display. Electron needs a display server — Xvfb satisfies that requirement with zero overhead. No VNC, no desktop environment, no window manager.
-
-Obsidian Sync runs inside the app, keeping the server-side vault in sync with all your devices. The native CLI (Obsidian 1.12+) provides programmatic access.
-
-### obsidi-backup
-
-The [`obsidi-backup`](https://github.com/cameronsjo/obsidi-backup) sidecar watches the vault directory for filesystem changes using inotify. After a configurable debounce period (default: 5 minutes), it:
-
-1. Commits changes to git with an AI-generated message describing what changed (or falls back to a timestamp)
-2. Encrypts and deduplicates to offsite storage via restic
-3. Prunes old snapshots per retention policy (7 daily, 4 weekly, 12 monthly)
-4. Notifies via Discord, Slack, or generic webhook
-
-### obsidi-mcp
-
-An Obsidian community plugin that runs inside the headless container, exposing vault operations as MCP tools. AI agents (Claude.ai, obsidi-claude, or any MCP client) connect through your auth/ingress layer to read and write notes, search, manage tags, and more.
-
-### obsidi-claude
-
-A chatbot-style UI plugin for the desktop Obsidian app. It connects to the server's obsidi-mcp over the network — so you can chat with your vault from your laptop while the server handles the heavy lifting, backup, and sync.
+</details>
 
 ## License
 
