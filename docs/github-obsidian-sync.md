@@ -1,14 +1,15 @@
-# GitHub -> Obsidian Sync
+# GitHub <-> Obsidian Sync
 
-One-way sync from a GitHub repo into an Obsidian vault. GitHub is the source of truth. Obsidian is the reader.
+Bidirectional sync between a GitHub repo and an Obsidian vault. GitHub is the collaboration layer. Obsidian is the knowledge layer.
 
 ## The Use Case
 
-A collaborative knowledge base — like [dev-encyclopedia](https://github.com/cameronsjo/dev-encyclopedia) — where the content is an Obsidian vault that lives in a GitHub repo. People contribute through the GitHub experience: PRs, web editor, Claude, forks. The vault on the server pulls those changes and Obsidian does what Obsidian does — graph view, backlinks, dataview, MCP.
+A collaborative knowledge base — like [dev-encyclopedia](https://github.com/cameronsjo/dev-encyclopedia) — where the content is an Obsidian vault that lives in a GitHub repo. Contributors work through the GitHub experience: PRs, web editor, Claude Code, forks. The vault on the server pulls those changes and Obsidian does what Obsidian does — graph view, backlinks, dataview, MCP.
 
-**The editing experience is GitHub. The reading experience is Obsidian.**
+Changes flow both ways:
 
-This is intentionally one-way. Changes on GitHub flow into the vault. The vault does not push back. If you want bidirectional sync, that's a different (harder, messier) problem and you should look at the default obaass pattern instead.
+- **GitHub -> Obsidian**: A contributor merges a PR. The server pulls it. Obsidian renders it. Your phone gets it via Sync.
+- **Obsidian -> GitHub**: An AI agent writes a note via MCP. The sync service commits and pushes. It shows up on GitHub. Other contributors see it.
 
 ## How It Differs From Default obaass
 
@@ -18,40 +19,44 @@ Default obaass:
 Devices <-> Obsidian Sync <-> obsidi-headless <-> obsidi-backup -> git -> offsite
 ```
 
-Everything starts at the device. Obsidian Sync moves changes to the server. obsidi-backup commits them to git. The backup is downstream.
+Everything starts at the device. Obsidian Sync moves changes to the server. obsidi-backup commits them to git as a backup destination. Git is downstream. Nobody edits on GitHub.
 
-GitHub -> Obsidian:
+GitHub <-> Obsidian:
 
 ```
-GitHub (PRs, web editor, Claude)
+GitHub (PRs, web editor, Claude Code)
+    ^
+    |  git pull / git push
+    v
+Vault on server (git clone)
+    ^
     |
-    v  git pull
-Vault on server
-    |
-    v  Obsidian renders it
+    v
 obsidi-headless (graph, backlinks, MCP, plugins)
-    |
-    v  Obsidian Sync (optional)
+    ^
+    |  Obsidian Sync (optional)
+    v
 Your devices
 ```
 
-Everything starts at GitHub. The vault is a `git clone`. obsidi-headless gives you the Obsidian experience on top of it. Obsidian Sync is optional — only needed if you also want the content on your phone.
+GitHub becomes a peer, not a backup target. The vault is a `git clone`. obsidi-backup gets repurposed — instead of just committing, it also pulls. Instead of encrypting offsite, it pushes to GitHub. GitHub handles the history, collaboration, and backup.
 
 ### What changes
 
-| Component | Default obaass | GitHub -> Obsidian |
+| Component | Default obaass | GitHub <-> Obsidian |
 |-----------|---------------|-------------------|
 | Source of truth | Your devices (via Obsidian Sync) | GitHub repo |
-| obsidi-backup | Watches vault, commits to git, encrypts offsite | **Not needed** — GitHub IS the backup |
-| obsidi-headless | Receives changes via Sync | Receives changes via `git pull` |
+| obsidi-backup | Watches vault -> commits -> encrypts offsite | Becomes **obsidi-sync**: pulls from GitHub, commits local changes, pushes back |
+| obsidi-headless | Receives changes via Sync | Receives changes via `git pull` (and still via Sync if enabled) |
 | Obsidian Sync | Required (how changes reach the server) | Optional (distributes to devices) |
 | Obsidian Catalyst | Required (for CLI) | Only if you use Sync or MCP |
-| obsidi-mcp | Full read/write | Read-only recommended (writes wouldn't flow back to GitHub) |
+| obsidi-mcp | Full read/write, changes stay local | Full read/write, changes push to GitHub |
+| Restic / offsite backup | Core feature | Not needed — GitHub is the history |
 
 ### What stays the same
 
 - obsidi-headless still runs headlessly — Obsidian needs it for plugins, rendering, MCP
-- obsidi-mcp still works — AI agents can read the vault
+- obsidi-mcp still works — AI agents can read and write the vault
 - Auth layer is still recommended if exposing MCP
 - Docker Compose still orchestrates everything
 
@@ -66,14 +71,14 @@ graph TB
         claude_code["Claude Code"]
     end
 
-    github["GitHub Repo<br/>(source of truth)"]
+    github["GitHub Repo"]
 
     subgraph server["the safe-ish stack"]
-        sync_svc["obsidi-sync<br/>periodic git pull"]
+        sync_svc["obsidi-sync<br/>pull + commit + push"]
 
         subgraph headless["obsidi-headless"]
             obs_app["Obsidian App"]
-            obs_mcp["obsidi-mcp plugin<br/>(read-only)"]
+            obs_mcp["obsidi-mcp plugin"]
         end
 
         vault["Vault<br/>(git clone)"]
@@ -90,17 +95,19 @@ graph TB
     web --> github
     claude_code --> github
 
-    github -->|git pull| sync_svc
+    github <-->|pull / push| sync_svc
     sync_svc --> vault
     vault --> obs_app
-    obs_app -->|if Sync enabled| sync_cloud
-    sync_cloud --> phone
-    sync_cloud --> desktop
+    obs_mcp -->|writes| vault
+
+    obs_app <-->|if Sync enabled| sync_cloud
+    sync_cloud <--> phone
+    sync_cloud <--> desktop
 ```
 
 ## The Sync Service
 
-obsidi-backup gets replaced (or repurposed) with a simpler service: poll GitHub for changes. The whole thing fits in a script.
+obsidi-backup gets repurposed into a two-way sync loop: pull remote changes, detect local changes, commit and push them back.
 
 ```bash
 #!/bin/bash
@@ -109,22 +116,34 @@ BRANCH="${GIT_BRANCH:-main}"
 
 cd "$VAULT_PATH"
 
-# initial clone happens at container startup
 while true; do
-    git fetch origin "$BRANCH" --quiet
-    LOCAL=$(git rev-parse HEAD)
-    REMOTE=$(git rev-parse "origin/$BRANCH")
-
-    if [ "$LOCAL" != "$REMOTE" ]; then
-        git reset --hard "origin/$BRANCH"
-        echo "$(date -Iseconds) synced to $(git rev-parse --short HEAD)"
+    # 1. commit any local changes (MCP writes, Sync edits)
+    git add -A
+    if ! git diff --cached --quiet; then
+        MSG="vault: $(date -Iseconds)"
+        git commit -m "$MSG" --quiet
     fi
+
+    # 2. pull remote changes, rebase local commits on top
+    git pull --rebase origin "$BRANCH" --quiet
+
+    # 3. push local commits to GitHub
+    git push origin "$BRANCH" --quiet 2>/dev/null
 
     sleep "$POLL_INTERVAL"
 done
 ```
 
-That's it. No inotify, no debounce, no AI commit messages, no restic. GitHub handles the history. GitHub handles the backup. The sync service just pulls.
+The loop is: commit local, pull remote, push local. Every `POLL_INTERVAL` seconds. If there's nothing to commit, it just pulls. If there's nothing to pull, it just pushes. If there's nothing at all, it sleeps.
+
+### Conflict Resolution
+
+With `git pull --rebase`, local commits get replayed on top of remote changes. For a knowledge base where different people edit different notes, conflicts are rare. When they do happen:
+
+- **Automatic merge**: Git handles non-overlapping changes in the same file automatically
+- **Conflict**: If two people edit the same lines, `git rebase` fails. The sync service should detect this, abort the rebase, and use a merge commit instead — or create a `.conflict` copy and notify
+
+For most vaults, the simple version works. If you're collaborating heavily on the same files, you probably want PR-based workflow on those files anyway.
 
 ### Polling vs Webhooks
 
@@ -161,11 +180,13 @@ volumes:
   obsidian-config:
 ```
 
-Things that go away: `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DISCORD_WEBHOOK_URL`, `BACKUP_DEBOUNCE`. The sync service only needs a repo URL, a branch, and a polling interval.
+Things that go away: `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, `BACKUP_DEBOUNCE`. The sync service only needs a repo URL, a branch, and a polling interval.
+
+Things that could stay: `ANTHROPIC_API_KEY` for AI commit messages on the push side (instead of `vault: 2025-01-15T...`), `DISCORD_WEBHOOK_URL` for sync notifications.
 
 ### Private repos
 
-For private GitHub repos, mount a deploy key or use a GitHub App token:
+For private GitHub repos, use a GitHub App token or deploy key:
 
 ```yaml
 sync:
@@ -175,38 +196,34 @@ sync:
 
 Or mount an SSH key and use the SSH URL.
 
-## MCP Considerations
+## MCP in Both Directions
 
-In the default obaass pattern, obsidi-mcp has full read/write access. An AI agent can create, edit, and delete notes. Those changes propagate via Sync and get backed up.
+MCP writes work naturally in this pattern. An AI agent writes a note via obsidi-mcp, the sync service picks it up, commits, and pushes to GitHub. The note shows up in the repo like any other change.
 
-In the GitHub -> Obsidian pattern, MCP writes are a problem. If an AI writes a note via MCP, the change is local to the server. It won't appear on GitHub. Next `git pull` will overwrite it.
+This means you get two contribution paths:
 
-**Options:**
+1. **Humans via GitHub** — PRs, web editor, Claude Code. Review process, branch protection, CI checks. The deliberate path.
+2. **AI agents via MCP** — Direct writes to the vault. Committed and pushed automatically. The fast path.
 
-1. **Read-only MCP** — simplest. AI agents can read and search but not write. This is probably what you want for a shared knowledge base.
-
-2. **MCP writes create PRs** — the AI agent writes to a staging area, and the sync service commits and pushes a PR to GitHub. The change goes through the same review process as any other contribution. More complex but preserves the one-way model.
-
-3. **Accept local-only writes** — if you're okay with notes that exist on the server but not on GitHub. Fragile and confusing. Not recommended.
+Whether you want both paths open is a design decision. For a shared encyclopedia, you might want MCP to be read-only so all changes go through PR review. For a personal vault with AI assistants, full read/write MCP makes sense.
 
 ## When to Use This Pattern
 
-Use **GitHub -> Obsidian** when:
+Use **GitHub <-> Obsidian** when:
 - Multiple people contribute to the vault
-- You want PR-based review of content changes
-- The GitHub editing experience (web editor, Claude Code, forks) is how people interact with the content
-- You don't need every device to push changes back
-- The vault is a reference (encyclopedia, docs, wiki), not a personal daily-driver
+- You want the GitHub experience — PRs, code review, issues, branch protection
+- The vault is a reference (encyclopedia, docs, wiki) that benefits from collaboration tooling
+- You want AI agents to read (and optionally write) the knowledge base
+- Git history is your backup strategy
 
 Use **default obaass** when:
 - You're the only contributor
 - You edit primarily on your phone/laptop via Obsidian
-- You want bidirectional sync across all devices
+- You want Obsidian Sync as the primary transport
+- You want encrypted offsite backup via restic
 - The vault is personal (daily notes, journals, fleeting thoughts)
 
 ## What This Enables
-
-The dev-encyclopedia pattern:
 
 ```
 Contributor opens PR on GitHub
@@ -215,6 +232,12 @@ Contributor opens PR on GitHub
     -> Obsidian renders with graph view, backlinks, dataview
     -> AI agents can query the knowledge base via MCP
     -> Optionally syncs to devices for offline reading
+
+AI agent writes a note via MCP
+    -> Sync service commits and pushes
+    -> Shows up on GitHub
+    -> Other contributors see it, can edit, discuss
+    -> Devices get it via Sync
 ```
 
 GitHub gives you the collaboration layer that Obsidian doesn't have — issues, PRs, code review, branch protection, CI. Obsidian gives you the knowledge layer that GitHub doesn't have — graph visualization, backlinks, transclusion, community plugins.
