@@ -1,0 +1,7 @@
+{
+  "name": "obaass",
+  "description": "Headless Obsidian orchestrator via Docker Compose",
+  "author": {
+    "name": "cameronsjo"
+  }
+}

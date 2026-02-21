@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "obaass",
+  "owner": {
+    "name": "Cameron Sjo",
+    "github": "cameronsjo"
+  },
+  "plugins": [
+    {
+      "name": "obaass",
+      "source": "./.claude-plugin",
+      "description": "Headless Obsidian orchestrator via Docker Compose"
+    }
+  ]
+}
