@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# obsidi-headless-sync: Obsidian Sync without the Electron app
+# Replaces the Xvfb + Electron approach with the official headless client
+FROM node:22-alpine
+
+LABEL org.opencontainers.image.source="https://github.com/cameronsjo/obaass"
+LABEL org.opencontainers.image.description="Headless Obsidian Sync client"
+
+RUN apk add --no-cache tini su-exec
+
+RUN npm install -g obsidian-headless@0.0.3
+
+# Reuse the node user (UID/GID 1000, matches typical host user)
+RUN mkdir -p /vault && chown node:node /vault
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+VOLUME /vault
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD ob sync-status --path /vault 2>/dev/null || exit 1
+
+WORKDIR /vault
+
+ENTRYPOINT ["/sbin/tini", "--", "/entrypoint.sh"]
+CMD ["ob", "sync", "--continuous", "--path", "/vault"]
