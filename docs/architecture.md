@@ -2,7 +2,7 @@
 
 ## The Pattern
 
-Obsidian is a desktop app. No server mode. No native API. No headless option. obaass runs it on a server anyway, because apparently that's how we spend our weekends now.
+Obsidian now ships an official headless sync client. obaass wraps it in a container alongside encrypted backup and AI agent access.
 
 ## the safe-ish stack
 
@@ -29,26 +29,27 @@ graph TB
 
     subgraph server["the safe-ish stack"]
         subgraph headless["obsidi-headless"]
-            obs_app["Obsidian App<br/>w/ Native Sync"]
-            obs_mcp["obsidi-mcp plugin"]
+            ob_sync["ob sync --continuous"]
         end
         backup["obsidi-backup"]
         vault["Vault"]
     end
 
     offsite["Offsite Storage<br/>just in case"]
+    gitea["Gitea<br/>git.sjo.lol"]
 
     phone ---|sync| sync_cloud
     desktop ---|sync| sync_cloud
-    sync_cloud ---|sync| obs_app
+    sync_cloud ---|sync| ob_sync
 
     claude_ai -- MCP --> ts
     desktop -. MCP .-> proxy
-    agw -- MCP --> obs_mcp
+    agw -- MCP --> vault
 
-    obs_app --> vault
+    ob_sync --> vault
     vault --> backup
     backup -- encrypted --> offsite
+    backup -- git push --> gitea
 ```
 
 **Three paths, one vault:**
@@ -91,24 +92,20 @@ graph TB
         direction TB
 
         subgraph obsidian["obsidi-headless"]
-            xvfb["Xvfb :99<br/>the fakest display"]
-            app["Obsidian App<br/>thinking it has a monitor"]
+            ob["ob sync --continuous<br/>obsidian-headless npm"]
             sync["Obsidian Sync"]
-            cli["Obsidian CLI"]
-            mcp["obsidi-mcp plugin"]
-            xvfb --> app
-            app --> sync
-            app --> cli
-            app --> mcp
+            ob --> sync
         end
 
         subgraph backup["obsidi-backup"]
             inotify["inotify watcher"]
             git["Git auto-commit"]
             ai["AI commit messages<br/>better than yours"]
+            push["Git push"]
             restic["Restic backup"]
             inotify --> git
             git --> ai
+            git --> push
             git --> restic
         end
 
@@ -119,6 +116,9 @@ graph TB
 
     cloud["Obsidian Sync Cloud"]
     sync ---|sync| cloud
+
+    gitea["Gitea"]
+    push -- push --> gitea
 
     offsite["Offsite Storage"]
     restic -- encrypted --> offsite
@@ -182,13 +182,14 @@ graph LR
 - Phone edit -> Server receives via Sync -> Backup captures -> AI can read it
 - Backup restores a file -> Sync propagates -> AI and all devices see it
 
-## Why Xvfb?
+## Why obsidian-headless?
 
-Obsidian is an Electron app. Electron requires a display server — it will literally refuse to start without one. Xvfb (X Virtual Framebuffer) satisfies this requirement with a virtual display that renders to memory. Nothing is actually drawn. It's a display for an app with no eyes.
+Obsidian shipped [`obsidian-headless`](https://www.npmjs.com/package/obsidian-headless) — an official Node.js CLI that implements the Obsidian Sync protocol without the desktop app. No Electron, no Xvfb, no display server.
 
-| Approach | Image Size | Overhead | GUI Access |
-|----------|-----------|----------|------------|
-| KasmVNC + XFCE (v1) | ~800MB+ | High — entire desktop environment for one app | Yes (browser) |
-| **Xvfb only (v2)** | **~400MB** | **Minimal — just enough to trick Electron** | **No** |
+| Approach | Image Size | Overhead | What runs |
+|----------|-----------|----------|-----------|
+| KasmVNC + XFCE (v1) | ~800MB+ | High — entire desktop environment | Full Obsidian + desktop |
+| Xvfb only (v2) | ~400MB | Medium — fake display for Electron | Full Obsidian + Xvfb |
+| **obsidian-headless (v3)** | **~180MB** | **Minimal — Node.js only** | **`ob sync --continuous`** |
 
-v1 shipped an entire desktop environment just to run a single app. v2 strips all of that away. If you need a GUI, use a real device. The server is for Sync, CLI, and backup. It doesn't need to see.
+v3 eliminates the entire Electron stack. The container runs a single Node.js process that speaks the Sync protocol directly. No display tricks, no AppImage extraction, no 20+ system libraries.
