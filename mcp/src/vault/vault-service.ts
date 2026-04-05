@@ -1,0 +1,273 @@
+import { readdir, readFile, writeFile, mkdir, stat, unlink, rename as fsRename } from "node:fs/promises";
+import { join, relative, dirname, extname, basename } from "node:path";
+import { parseNote, extractTags, extractHeadings } from "./frontmatter.js";
+import { extractWikilinks, rewriteWikilinks } from "./wikilink.js";
+
+/** Directories to skip when walking the vault. */
+const IGNORED_DIRS = new Set([".obsidian", ".git", ".trash", ".claude", "node_modules"]);
+
+export interface VaultFile {
+  path: string;
+  name: string;
+  extension: string;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface FileMetadata {
+  path: string;
+  frontmatter: Record<string, unknown> | null;
+  tags: string[];
+  headings: Array<{ level: number; text: string }>;
+  wikilinks: Array<{ path: string; alias?: string; heading?: string }>;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  type: "file" | "directory";
+  children?: DirectoryEntry[];
+}
+
+export class VaultService {
+  constructor(private readonly vaultPath: string) {}
+
+  /** Resolve a vault-relative path to an absolute path, with traversal protection. */
+  private resolve(vaultRelPath: string): string {
+    const resolved = join(this.vaultPath, vaultRelPath);
+    const rel = relative(this.vaultPath, resolved);
+    if (rel.startsWith("..") || rel.startsWith("/")) {
+      throw new Error(`Path traversal rejected: ${vaultRelPath}`);
+    }
+    return resolved;
+  }
+
+  /** Read a file's content. */
+  async readFile(path: string): Promise<string> {
+    return readFile(this.resolve(path), "utf-8");
+  }
+
+  /** Write content to a file, creating parent directories as needed. */
+  async writeFile(path: string, content: string): Promise<void> {
+    const absPath = this.resolve(path);
+    await mkdir(dirname(absPath), { recursive: true });
+    await writeFile(absPath, content, "utf-8");
+  }
+
+  /** Delete a file. */
+  async deleteFile(path: string): Promise<void> {
+    await unlink(this.resolve(path));
+  }
+
+  /** Rename/move a file. */
+  async renameFile(oldPath: string, newPath: string): Promise<void> {
+    const absNew = this.resolve(newPath);
+    await mkdir(dirname(absNew), { recursive: true });
+    await fsRename(this.resolve(oldPath), absNew);
+  }
+
+  /** Check if a file exists. */
+  async exists(path: string): Promise<boolean> {
+    try {
+      await stat(this.resolve(path));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Get file stats. */
+  async stat(path: string): Promise<VaultFile> {
+    const absPath = this.resolve(path);
+    const s = await stat(absPath);
+    return {
+      path,
+      name: basename(path),
+      extension: extname(path),
+      mtimeMs: s.mtimeMs,
+      size: s.size,
+    };
+  }
+
+  /** List all markdown files in the vault. */
+  async listMarkdownFiles(): Promise<VaultFile[]> {
+    const files: VaultFile[] = [];
+    await this.walkDir(this.vaultPath, files);
+    return files;
+  }
+
+  private async walkDir(dir: string, files: VaultFile[]): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        await this.walkDir(join(dir, entry.name), files);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        const absPath = join(dir, entry.name);
+        const relPath = relative(this.vaultPath, absPath);
+        const s = await stat(absPath);
+        files.push({
+          path: relPath,
+          name: entry.name,
+          extension: ".md",
+          mtimeMs: s.mtimeMs,
+          size: s.size,
+        });
+      }
+    }
+  }
+
+  /** Get the vault directory tree. */
+  async getStructure(rootPath = ""): Promise<DirectoryEntry[]> {
+    const absRoot = rootPath ? this.resolve(rootPath) : this.vaultPath;
+    return this.buildTree(absRoot);
+  }
+
+  private async buildTree(dir: string): Promise<DirectoryEntry[]> {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const result: DirectoryEntry[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        const children = await this.buildTree(join(dir, entry.name));
+        result.push({ name: entry.name, type: "directory", children });
+      } else if (entry.isFile()) {
+        result.push({ name: entry.name, type: "file" });
+      }
+    }
+
+    return result.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  /** Get metadata for a single file. */
+  async getMetadata(path: string): Promise<FileMetadata> {
+    const content = await this.readFile(path);
+    const { frontmatter } = parseNote(content);
+    const tags = extractTags(content);
+    const headings = extractHeadings(content);
+    const wikilinks = extractWikilinks(content).map(({ path, alias, heading }) => ({
+      path,
+      alias,
+      heading,
+    }));
+
+    return { path, frontmatter, tags, headings, wikilinks };
+  }
+
+  /** Search for text/regex across all markdown files. */
+  async searchContent(
+    query: string,
+    options: { regex?: boolean; caseSensitive?: boolean; maxResults?: number } = {},
+  ): Promise<Array<{ path: string; line: number; text: string }>> {
+    const { regex = false, caseSensitive = false, maxResults = 100 } = options;
+    const files = await this.listMarkdownFiles();
+    const results: Array<{ path: string; line: number; text: string }> = [];
+
+    const flags = caseSensitive ? "g" : "gi";
+    const pattern = regex ? new RegExp(query, flags) : new RegExp(escapeRegex(query), flags);
+
+    for (const file of files) {
+      if (results.length >= maxResults) break;
+      const content = await this.readFile(file.path);
+      const lines = content.split("\n");
+
+      for (let i = 0; i < lines.length; i++) {
+        if (results.length >= maxResults) break;
+        if (pattern.test(lines[i])) {
+          results.push({ path: file.path, line: i + 1, text: lines[i] });
+        }
+        pattern.lastIndex = 0;
+      }
+    }
+
+    return results;
+  }
+
+  /** Get all tags across the vault with usage counts. */
+  async getAllTags(): Promise<Record<string, number>> {
+    const files = await this.listMarkdownFiles();
+    const tagCounts: Record<string, number> = {};
+
+    for (const file of files) {
+      const content = await this.readFile(file.path);
+      const tags = extractTags(content);
+      for (const tag of tags) {
+        tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+      }
+    }
+
+    return tagCounts;
+  }
+
+  /** Find files matching a tag. */
+  async findByTag(tag: string): Promise<string[]> {
+    const files = await this.listMarkdownFiles();
+    const matches: string[] = [];
+
+    for (const file of files) {
+      const content = await this.readFile(file.path);
+      const tags = extractTags(content);
+      if (tags.includes(tag.replace(/^#/, ""))) {
+        matches.push(file.path);
+      }
+    }
+
+    return matches;
+  }
+
+  /** Find files matching a frontmatter property value. */
+  async findByProperty(
+    property: string,
+    value?: string,
+  ): Promise<Array<{ path: string; value: unknown }>> {
+    const files = await this.listMarkdownFiles();
+    const matches: Array<{ path: string; value: unknown }> = [];
+
+    for (const file of files) {
+      const content = await this.readFile(file.path);
+      const { frontmatter } = parseNote(content);
+      if (!frontmatter || !(property in frontmatter)) continue;
+
+      const propValue = frontmatter[property];
+      if (value === undefined || String(propValue) === value) {
+        matches.push({ path: file.path, value: propValue });
+      }
+    }
+
+    return matches;
+  }
+
+  /** Get recently modified files, sorted newest first. */
+  async getRecentFiles(count = 20): Promise<VaultFile[]> {
+    const files = await this.listMarkdownFiles();
+    files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return files.slice(0, count);
+  }
+
+  /** Rename a file and update wikilinks across the vault. */
+  async renameWithLinks(oldPath: string, newPath: string): Promise<number> {
+    await this.renameFile(oldPath, newPath);
+
+    // Update wikilinks in all markdown files
+    const files = await this.listMarkdownFiles();
+    let updatedCount = 0;
+
+    for (const file of files) {
+      const content = await this.readFile(file.path);
+      const updated = rewriteWikilinks(content, oldPath, newPath);
+      if (updated !== content) {
+        await this.writeFile(file.path, updated);
+        updatedCount++;
+      }
+    }
+
+    return updatedCount;
+  }
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
