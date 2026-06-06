@@ -61,13 +61,65 @@ async function main() {
 	);
 
 	// Start server
-	app.listen(config.httpPort, config.httpHost, () => {
+	const httpServer = app.listen(config.httpPort, config.httpHost, () => {
 		const tools = registry.getAllTools();
 		logger.info("obaass-mcp ready", {
 			address: `http://${config.httpHost}:${config.httpPort}`,
 			mcpPath: config.httpPath,
 			toolCount: tools.length,
 			providers: registry.getProviderIds(),
+		});
+	});
+
+	installShutdownHandlers(httpServer, pluginClient);
+}
+
+/**
+ * Wire SIGTERM/SIGINT to a graceful shutdown: stop accepting connections, close
+ * the plugin client, and force-exit if cleanup stalls. Also trap otherwise-fatal
+ * async errors so a single rejection cannot silently take down the process.
+ */
+function installShutdownHandlers(
+	httpServer: import("node:http").Server,
+	pluginClient: PluginClient | undefined,
+): void {
+	let shuttingDown = false;
+	const shutdown = (signal: string) => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		logger.info("Shutting down", { signal });
+
+		// Hard cap so a hung connection can't block exit forever.
+		const forceExit = setTimeout(() => {
+			logger.warn("Forced exit after shutdown timeout");
+			process.exit(1);
+		}, 10_000);
+		forceExit.unref();
+
+		httpServer.close(async () => {
+			try {
+				await pluginClient?.disconnect();
+			} catch (err) {
+				logger.warn("Error during plugin disconnect", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+			logger.info("Shutdown complete");
+			process.exit(0);
+		});
+	};
+
+	process.on("SIGTERM", () => shutdown("SIGTERM"));
+	process.on("SIGINT", () => shutdown("SIGINT"));
+
+	process.on("unhandledRejection", (reason) => {
+		logger.error("Unhandled promise rejection", {
+			error: reason instanceof Error ? reason.message : String(reason),
+		});
+	});
+	process.on("uncaughtException", (err) => {
+		logger.error("Uncaught exception", {
+			error: err instanceof Error ? err.message : String(err),
 		});
 	});
 }
