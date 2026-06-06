@@ -51,7 +51,7 @@ export class BackupToolProvider implements ToolProvider {
 		return {
 			name: "backup_status",
 			description:
-				"Get the current status of the vault backup system (last commit, last backup, health).",
+				"Get the current status of the vault backup system (last commit, last backup, health). Takes no arguments.",
 			inputSchema: z.object({}),
 			handler: async () => {
 				const health = await this.client.health();

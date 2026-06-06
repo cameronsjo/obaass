@@ -72,7 +72,8 @@ export class PluginToolProvider implements ToolProvider {
 	private backlinks(): ToolDefinition {
 		return this.proxyTool(
 			"backlinks",
-			"Get all notes that link TO a specific note",
+			"Get notes that link TO a specific note (incoming links only). For links in both " +
+				"directions use graph_neighbors; for tag membership use search_by_tag.",
 			z.object({
 				path: z.string().describe("Vault-relative path to find backlinks for"),
 			}),
@@ -83,7 +84,8 @@ export class PluginToolProvider implements ToolProvider {
 	private graphNeighbors(): ToolDefinition {
 		return this.proxyTool(
 			"graph_neighbors",
-			"Get directly connected notes in the knowledge graph (bidirectional links)",
+			"Get directly connected notes in the knowledge graph — links in BOTH directions " +
+				"(incoming and outgoing). For incoming links only, use backlinks.",
 			z.object({
 				path: z.string().describe("Vault-relative path to find neighbors for"),
 				depth: z.number().optional().describe("Traversal depth (default: 1)"),
@@ -95,7 +97,8 @@ export class PluginToolProvider implements ToolProvider {
 	private dataviewQuery(): ToolDefinition {
 		return this.proxyTool(
 			"run_dataview_query",
-			"Execute a Dataview Query Language (DQL) query against the vault",
+			"Execute a Dataview Query Language (DQL) query against the vault. " +
+				'Example: {query: \'TABLE file.mtime FROM "Projects" WHERE status = "active"\'}.',
 			z.object({
 				query: z.string().describe("DQL query string"),
 			}),

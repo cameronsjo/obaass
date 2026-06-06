@@ -180,7 +180,9 @@ export class VaultToolProvider implements ToolProvider {
 		return {
 			name: "search_content",
 			description:
-				"Search for text or regex pattern across all markdown files in the vault.",
+				"Search for text or a regex pattern across all markdown files in the vault. " +
+				"Example: {query: 'TODO'} for literal text, or {query: '#[a-z]+', regex: true}. " +
+				"Returns up to maxResults matches (default 100, max 1000), each with path and line number.",
 			inputSchema: z.object({
 				query: z.string().describe("Search query (text or regex pattern)"),
 				regex: z
@@ -254,7 +256,8 @@ export class VaultToolProvider implements ToolProvider {
 		return {
 			name: "vault_tags",
 			description:
-				"Get all tags used across the vault with their usage counts.",
+				"Get all tags used across the vault with their usage counts. Takes no arguments. " +
+				"To find the notes carrying a given tag, use search_by_tag.",
 			inputSchema: z.object({}),
 			handler: async () => {
 				const tags = await this.vault.getAllTags();
@@ -364,7 +367,8 @@ export class VaultToolProvider implements ToolProvider {
 		return {
 			name: "rename",
 			description:
-				"Rename or move a file. Optionally updates wikilinks across the vault.",
+				"Rename or move a file. By default (updateLinks: true) it rewrites every " +
+				"[[wikilink]] referencing this note across the entire vault; set updateLinks: false to skip that.",
 			inputSchema: z.object({
 				oldPath: z.string().describe("Current vault-relative path"),
 				newPath: z.string().describe("New vault-relative path"),
@@ -440,7 +444,7 @@ export class VaultToolProvider implements ToolProvider {
 		return {
 			name: "get_instructions",
 			description:
-				"Read vault-specific instructions from CLAUDE.md and AGENTS.md at the vault root.",
+				"Read vault-specific instructions from CLAUDE.md and AGENTS.md at the vault root. Takes no arguments.",
 			inputSchema: z.object({}),
 			handler: async () => {
 				const parts: string[] = [];
