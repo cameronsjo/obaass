@@ -11,7 +11,13 @@ FROM node:22-alpine AS production
 LABEL org.opencontainers.image.source="https://github.com/cameronsjo/obaass"
 LABEL org.opencontainers.image.description="Unified MCP server for the OBaaSS stack"
 
-RUN apk add --no-cache wget git
+# git is used for vault operations (log, status, diff against /vault).
+# safe.directory '*' is set system-wide so the nodejs:1001 user can access
+# the bind-mounted vault owned by nobody:users (99:100 on Unraid) without
+# hitting git's dubious-ownership check. Acceptable because this image is
+# single-purpose and the vault is a trusted bind-mount.
+RUN apk add --no-cache wget git \
+    && git config --system --add safe.directory '*'
 
 WORKDIR /app
 COPY --from=builder /app/package.json ./
