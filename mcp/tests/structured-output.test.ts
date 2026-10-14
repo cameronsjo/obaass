@@ -17,13 +17,7 @@ import { cleanupVault, makeTempVault, writeVaultFile } from "./helpers.js";
 const execFileAsync = promisify(execFile);
 const health = {
 	status: "healthy",
-	last_commit: null,
-	last_backup: null,
-	last_change: null,
-	pending_changes: false,
-	commits_since_backup: 0,
 	uptime_seconds: 10,
-	sync_state: null,
 };
 
 async function listen(server: Server): Promise<string> {
@@ -39,8 +33,10 @@ describe("structured output over MCP HTTP", () => {
 	let backupServer: Server;
 	let client: Client;
 	let registry: ToolRegistry;
+	let healthPayload: Record<string, unknown>;
 
 	beforeEach(async () => {
+		healthPayload = health;
 		vaultPath = await makeTempVault();
 		await writeVaultFile(
 			vaultPath,
@@ -66,7 +62,7 @@ describe("structured output over MCP HTTP", () => {
 		]);
 		backupServer = createServer((_req, res) => {
 			res.setHeader("content-type", "application/json");
-			res.end(JSON.stringify(health));
+			res.end(JSON.stringify(healthPayload));
 		});
 		const backupUrl = await listen(backupServer);
 		registry = new ToolRegistry();
@@ -111,6 +107,24 @@ describe("structured output over MCP HTTP", () => {
 			),
 		);
 		await cleanupVault(vaultPath);
+	});
+
+	it("accepts health field drift and omitted optional uptime without losing extra fields", async () => {
+		healthPayload = {
+			status: "healthy",
+			pipeline: { state: "idle" },
+			sync_state: ["synced"],
+			last_commit: { hash: "abc1234" },
+		};
+		await client.listTools();
+		const result = await client.callTool({
+			name: "backup_status",
+			arguments: {},
+		});
+		expect(result.isError).not.toBe(true);
+		expect(result.structuredContent).toEqual(healthPayload);
+		const content = result.content as Array<{ type: string; text: string }>;
+		expect(JSON.parse(content[0].text)).toEqual(healthPayload);
 	});
 
 	it.each([

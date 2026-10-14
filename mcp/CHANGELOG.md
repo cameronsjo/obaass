@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Match `backup_status` to the sidecar's actual `/health` response; preserve
+  unknown fields and tolerate absent optional uptime across sidecar versions.
+
 - JSON-returning tools advertise an MCP `outputSchema` and return validated
   `structuredContent` alongside their existing JSON text. `vault_structure` uses
   `{ entries: [...] }` and `recent_files` uses `{ files: [...] }` for the structured

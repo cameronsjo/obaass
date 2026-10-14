@@ -2,7 +2,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { BackupClient } from "../integrations/backup-client.js";
+import {
+	type BackupClient,
+	backupHealthOutputSchema,
+} from "../integrations/backup-client.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -53,20 +56,9 @@ export class BackupToolProvider implements ToolProvider {
 	private backupStatus(): ToolDefinition {
 		return {
 			name: "backup_status",
-			outputSchema: z
-				.object({
-					status: z.string(),
-					last_commit: z.string().nullable().optional(),
-					last_backup: z.string().nullable().optional(),
-					last_change: z.string().nullable().optional(),
-					pending_changes: z.boolean().optional(),
-					commits_since_backup: z.number().int().nonnegative().optional(),
-					uptime_seconds: z.number().nonnegative().optional(),
-					sync_state: z.record(z.unknown()).nullable().optional(),
-				})
-				.passthrough(),
+			outputSchema: backupHealthOutputSchema,
 			description:
-				"Get the current status of the vault backup system (last commit, last backup, health). Takes no arguments.",
+				"Get backup service liveness health: status, optional uptime, and any version-specific fields. Use backup_history for commits. Takes no arguments.",
 			inputSchema: z.object({}),
 			handler: async () => {
 				const health = await this.client.health();

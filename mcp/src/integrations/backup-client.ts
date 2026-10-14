@@ -1,13 +1,17 @@
+import { z } from "zod";
 import { logger } from "../logger.js";
 
-export interface BackupHealth {
-	status: string;
-	last_commit?: string;
-	last_backup?: string;
-	pending_changes?: boolean;
-	commits_since_backup?: number;
-	uptime_seconds?: number;
-}
+// obsidi-backup's HealthHandler._send_health() returns only status and uptime.
+// Backup timestamps/pipeline fields belong to /status. Older/newer sidecars can
+// add arbitrary fields; uptime remains optional for compatibility.
+export const backupHealthOutputSchema = z
+	.object({
+		status: z.string(),
+		uptime_seconds: z.number().optional(),
+	})
+	.passthrough();
+
+export type BackupHealth = z.infer<typeof backupHealthOutputSchema>;
 
 export interface GitCommit {
 	hash: string;
