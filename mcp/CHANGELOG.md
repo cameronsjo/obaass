@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Validate HTTP Host and Origin with the SDK before parsing or dispatch; default
+  to loopback at the configured port. `MCP_ALLOWED_HOSTS` explicitly permits
+  additional LAN/Tailscale endpoints or HTTPS proxy origins. Existing remote
+  clients must opt in; mismatched hosts, schemes or ports now receive 403.
+
 - Reject idle event subscriptions because this service publishes no events;
   expose the real-process SDK smoke probe as `npm run test:smoke`.
 

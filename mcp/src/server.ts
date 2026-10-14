@@ -1,6 +1,7 @@
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import express, { type Request, type Response } from "express";
+import { httpSecurityMiddleware } from "./http-security.js";
 import { logger } from "./logger.js";
 import type { ToolRegistry } from "./tools/index.js";
 
@@ -9,6 +10,7 @@ const JSONRPC_INTERNAL_ERROR = -32603;
 
 export function createMcpApp(registry: ToolRegistry, mcpPath: string) {
 	const app = express();
+	app.use(httpSecurityMiddleware());
 	app.use(express.json());
 	const onerror = (error: Error) => {
 		logger.error("MCP request handling failed", { error: error.message });

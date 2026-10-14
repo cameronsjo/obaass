@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-UTC}
+      # Optional obsidi-mcp plugin: explicit LAN/Tailscale Host/Origin allowance.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
     volumes:
       - obsidian-config:/config
       - ${VAULT_PATH:-.}/vault:/vault
