@@ -17,16 +17,7 @@ import { VaultService } from "../src/vault/vault-service.js";
 import { cleanupVault, makeTempVault, writeVaultFile } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);
-const health = {
-	status: "healthy",
-	last_commit: null,
-	last_backup: null,
-	last_change: null,
-	pending_changes: false,
-	commits_since_backup: 0,
-	uptime_seconds: 10,
-	sync_state: null,
-};
+const health = { status: "healthy", uptime_seconds: 10 };
 
 async function listen(server: Server): Promise<string> {
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -44,8 +35,10 @@ describe.each(["legacy", "modern"] as const)(
 		let client: Client;
 		let registry: ToolRegistry;
 		let closeMcp: () => Promise<void>;
+		let healthPayload: Record<string, unknown>;
 
 		beforeEach(async () => {
+			healthPayload = health;
 			vaultPath = await makeTempVault();
 			await writeVaultFile(
 				vaultPath,
@@ -71,7 +64,7 @@ describe.each(["legacy", "modern"] as const)(
 			]);
 			backupServer = createServer((_req, res) => {
 				res.setHeader("content-type", "application/json");
-				res.end(JSON.stringify(health));
+				res.end(JSON.stringify(healthPayload));
 			});
 			const backupUrl = await listen(backupServer);
 			registry = new ToolRegistry();
@@ -125,6 +118,24 @@ describe.each(["legacy", "modern"] as const)(
 				),
 			);
 			await cleanupVault(vaultPath);
+		});
+
+		it("accepts health field drift and omitted optional uptime", async () => {
+			healthPayload = {
+				status: "healthy",
+				pipeline: { state: "idle" },
+				sync_state: ["synced"],
+				last_commit: { hash: "abc1234" },
+			};
+			await client.listTools();
+			const result = await client.callTool({
+				name: "backup_status",
+				arguments: {},
+			});
+			expect(result.isError).not.toBe(true);
+			expect(result.structuredContent).toEqual(healthPayload);
+			const content = result.content as Array<{ type: string; text: string }>;
+			expect(JSON.parse(content[0].text)).toEqual(healthPayload);
 		});
 
 		it.each([
