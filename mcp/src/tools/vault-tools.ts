@@ -1,4 +1,4 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import { escapeRegex } from "../util.js";
@@ -298,7 +298,7 @@ export class VaultToolProvider implements ToolProvider {
 			name: "vault_tags",
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
-				tags: z.record(z.number().int().nonnegative()),
+				tags: z.record(z.string(), z.number().int().nonnegative()),
 			}),
 			description:
 				"Get all tags used across the vault with their usage counts. Takes no arguments. " +
@@ -408,7 +408,7 @@ export class VaultToolProvider implements ToolProvider {
 			inputSchema: z.object({
 				path: z.string().describe("Vault-relative path to the note"),
 				properties: z
-					.record(z.unknown())
+					.record(z.string(), z.unknown())
 					.describe("Key-value pairs to set in frontmatter"),
 			}),
 			handler: async (params) => {

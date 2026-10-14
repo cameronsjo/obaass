@@ -149,6 +149,34 @@ All configuration is via environment variables in `.env`. See [.env.example](.en
 | `VAULT_PATH` | `.` | Directory containing your `vault/` folder |
 | `TZ` | `UTC` | Timezone |
 
+#### MCP HTTP access
+
+The unified MCP service in `mcp/` and the optional Obsidian MCP plugin now
+validate `Host` and `Origin` to block DNS rebinding. This intentionally tightens
+existing behavior: only `localhost`, `127.0.0.1`, and `[::1]` at the server's
+configured port are allowed by default, with their matching HTTP origins.
+Non-browser clients may omit `Origin`. Bad hosts, cross-site origins, and origins
+on a different scheme or port receive **403** before parsing or tool dispatch.
+
+Set `MCP_ALLOWED_HOSTS` in the server process/container environment to add explicit
+LAN or Tailscale endpoints, then restart the server. It is a comma-separated list:
+
+```dotenv
+# Hostnames use HTTP at the configured MCP port; HTTPS proxy origins are explicit.
+MCP_ALLOWED_HOSTS=vault.example.ts.net,100.100.100.100,https://vault.example.ts.net
+```
+
+`host:port` permits HTTP at that port; an `http://` or `https://` origin permits
+that exact scheme and port (default 80/443 if omitted). Wildcards, credentials,
+paths and query strings are rejected. Loopback defaults remain allowed when this
+variable is set. `X-Forwarded-Host`/`X-Forwarded-Proto` never expand the allowlist;
+add a proxy's public HTTPS origin explicitly. This is not authentication: continue
+to protect network access and configure gateway authorization separately.
+
+The compose example passes this variable to the Obsidian container for the optional
+plugin. When running the standalone `mcp/` service, pass the same variable to its
+own process/container. See [.env.example](.env.example).
+
 #### Backup
 
 | Variable | Default | Description |
