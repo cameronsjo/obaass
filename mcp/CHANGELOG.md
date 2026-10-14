@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reject idle event subscriptions because this service publishes no events;
+  expose the real-process SDK smoke probe as `npm run test:smoke`.
+
 - Match `backup_status` to the sidecar’s actual `/health` response; preserve
   unknown fields and tolerate absent optional uptime across sidecar versions.
 

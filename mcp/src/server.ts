@@ -16,6 +16,8 @@ export function createMcpApp(registry: ToolRegistry, mcpPath: string) {
 	// Fresh server per request for both 2026-07-28 and older stateless clients.
 	const handler = createMcpHandler(() => createServer(registry), {
 		legacy: "stateless",
+		// This app publishes no events; do not retain idle subscription streams.
+		maxSubscriptions: 0,
 		onerror,
 	});
 	const nodeHandler = toNodeHandler(handler, { onerror });

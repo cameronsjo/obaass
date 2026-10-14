@@ -77,6 +77,48 @@ describe("createMcpApp HTTP server", () => {
 		expect(res.status).toBe(405);
 	});
 
+	it("rejects modern subscription streams because the app publishes no events", async () => {
+		const res = await fetch(`${baseUrl}${MCP_PATH}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json, text/event-stream",
+				"MCP-Protocol-Version": "2026-07-28",
+				"Mcp-Method": "subscriptions/listen",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 9,
+				method: "subscriptions/listen",
+				params: {
+					notifications: { toolsListChanged: true },
+					_meta: {
+						"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+						"io.modelcontextprotocol/clientCapabilities": {},
+						"io.modelcontextprotocol/clientInfo": {
+							name: "subscription-probe",
+							version: "1.0.0",
+						},
+					},
+				},
+			}),
+		});
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("application/json");
+		expect(await res.json()).toMatchObject({
+			id: 9,
+			error: { code: -32603, message: "Subscription limit reached" },
+		});
+		const client = await connectClient(baseUrl);
+		try {
+			expect(
+				(await client.listTools()).tools.map((tool) => tool.name),
+			).toContain("echo");
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("retains the existing 100 KiB JSON body limit with the SDK adapter", async () => {
 		const res = await fetch(`${baseUrl}${MCP_PATH}`, {
 			method: "POST",
