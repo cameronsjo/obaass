@@ -11,8 +11,11 @@ function textResult(text: string): CallToolResult {
 	return { content: [{ type: "text", text }] };
 }
 
-function jsonResult(data: unknown): CallToolResult {
-	return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+function jsonResult(data: Record<string, unknown>): CallToolResult {
+	return {
+		content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+		structuredContent: data,
+	};
 }
 
 /**
@@ -50,12 +53,24 @@ export class BackupToolProvider implements ToolProvider {
 	private backupStatus(): ToolDefinition {
 		return {
 			name: "backup_status",
+			outputSchema: z
+				.object({
+					status: z.string(),
+					last_commit: z.string().nullable().optional(),
+					last_backup: z.string().nullable().optional(),
+					last_change: z.string().nullable().optional(),
+					pending_changes: z.boolean().optional(),
+					commits_since_backup: z.number().int().nonnegative().optional(),
+					uptime_seconds: z.number().nonnegative().optional(),
+					sync_state: z.record(z.unknown()).nullable().optional(),
+				})
+				.passthrough(),
 			description:
 				"Get the current status of the vault backup system (last commit, last backup, health). Takes no arguments.",
 			inputSchema: z.object({}),
 			handler: async () => {
 				const health = await this.client.health();
-				return jsonResult(health);
+				return jsonResult({ ...health });
 			},
 		};
 	}
@@ -63,6 +78,17 @@ export class BackupToolProvider implements ToolProvider {
 	private backupHistory(): ToolDefinition {
 		return {
 			name: "backup_history",
+			outputSchema: z.object({
+				count: z.number().int().nonnegative(),
+				commits: z.array(
+					z.object({
+						hash: z.string(),
+						shortHash: z.string(),
+						date: z.string(),
+						message: z.string(),
+					}),
+				),
+			}),
 			description: "List recent git commits from the vault backup history.",
 			inputSchema: z.object({
 				count: z
