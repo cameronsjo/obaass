@@ -76,10 +76,13 @@ function createServer(registry: ToolRegistry): McpServer {
 	});
 
 	for (const tool of registry.getAllTools()) {
-		server.tool(
+		server.registerTool(
 			tool.name,
-			tool.description,
-			tool.inputSchema.shape,
+			{
+				description: tool.description,
+				inputSchema: tool.inputSchema.shape,
+				...(tool.outputSchema && { outputSchema: tool.outputSchema }),
+			},
 			async (params) => {
 				try {
 					return await tool.handler(params as Record<string, unknown>);
