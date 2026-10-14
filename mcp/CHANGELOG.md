@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Await asynchronous MCP cleanup before successful process exit, while HTTP
+  shutdown starts concurrently and the existing ten-second timeout remains.
+
 - Validate HTTP Host and Origin with the SDK before parsing or dispatch; default
   to loopback at the configured port. `MCP_ALLOWED_HOSTS` explicitly permits
   additional LAN/Tailscale endpoints or HTTPS proxy origins. Existing remote
