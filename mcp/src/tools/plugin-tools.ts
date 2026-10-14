@@ -1,4 +1,4 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { PluginClient } from "../integrations/plugin-client.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
@@ -29,7 +29,7 @@ export class PluginToolProvider implements ToolProvider {
 	private proxyTool(
 		name: string,
 		description: string,
-		inputSchema: z.ZodObject<z.ZodRawShape>,
+		inputSchema: z.ZodObject,
 		pluginToolName: string,
 	): ToolDefinition {
 		return {

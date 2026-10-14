@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { BackupClient } from "../integrations/backup-client.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
@@ -62,7 +62,7 @@ export class BackupToolProvider implements ToolProvider {
 					pending_changes: z.boolean().optional(),
 					commits_since_backup: z.number().int().nonnegative().optional(),
 					uptime_seconds: z.number().nonnegative().optional(),
-					sync_state: z.record(z.unknown()).nullable().optional(),
+					sync_state: z.record(z.string(), z.unknown()).nullable().optional(),
 				})
 				.passthrough(),
 			description:

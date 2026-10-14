@@ -45,7 +45,7 @@ async function main() {
 	}
 
 	// Create MCP app
-	const { app } = createMcpApp(registry, config.httpPath);
+	const { app, close } = createMcpApp(registry, config.httpPath);
 
 	// Health endpoint
 	const startTime = Date.now();
@@ -71,7 +71,7 @@ async function main() {
 		});
 	});
 
-	installShutdownHandlers(httpServer, pluginClient);
+	installShutdownHandlers(httpServer, pluginClient, close);
 }
 
 /**
@@ -82,6 +82,7 @@ async function main() {
 function installShutdownHandlers(
 	httpServer: import("node:http").Server,
 	pluginClient: PluginClient | undefined,
+	closeMcp: () => Promise<void>,
 ): void {
 	let shuttingDown = false;
 	const shutdown = (signal: string) => {
@@ -96,6 +97,10 @@ function installShutdownHandlers(
 		}, 10_000);
 		forceExit.unref();
 
+		// End modern request/subscription streams before waiting for HTTP close.
+		void closeMcp().catch((err) => {
+			logger.warn("Error during MCP shutdown", { error: String(err) });
+		});
 		httpServer.close(async () => {
 			try {
 				await pluginClient?.disconnect();

@@ -1,6 +1,8 @@
 import type { Server } from "node:http";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+	Client,
+	StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createMcpApp } from "../src/server.js";
@@ -43,11 +45,13 @@ class FixtureProvider implements ToolProvider {
 describe("createMcpApp HTTP server", () => {
 	let server: Server;
 	let baseUrl: string;
+	let closeMcp: () => Promise<void>;
 
 	beforeEach(async () => {
 		const registry = new ToolRegistry();
 		registry.register(new FixtureProvider());
-		const { app } = createMcpApp(registry, MCP_PATH);
+		const { app, close } = createMcpApp(registry, MCP_PATH);
+		closeMcp = close;
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, "127.0.0.1", resolve);
 		});
@@ -57,6 +61,7 @@ describe("createMcpApp HTTP server", () => {
 	});
 
 	afterEach(async () => {
+		await closeMcp();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 
@@ -70,6 +75,31 @@ describe("createMcpApp HTTP server", () => {
 	it("rejects DELETE on the MCP endpoint with 405", async () => {
 		const res = await fetch(`${baseUrl}${MCP_PATH}`, { method: "DELETE" });
 		expect(res.status).toBe(405);
+	});
+
+	it("retains the existing 100 KiB JSON body limit with the SDK adapter", async () => {
+		const res = await fetch(`${baseUrl}${MCP_PATH}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: {
+					name: "echo",
+					arguments: { message: "x".repeat(100 * 1024) },
+				},
+			}),
+		});
+		expect(res.status).toBe(413);
+		const client = await connectClient(baseUrl);
+		try {
+			expect(
+				(await client.listTools()).tools.map((tool) => tool.name),
+			).toContain("echo");
+		} finally {
+			await client.close();
+		}
 	});
 
 	it("does not crash on a malformed JSON-RPC POST and keeps serving", async () => {
@@ -98,6 +128,69 @@ describe("createMcpApp HTTP server", () => {
 		expect(names).toContain("echo");
 		expect(names).toContain("boom");
 		await client.close();
+	});
+
+	it("serves 2026-07-28 per-request context without initialize or a session ID", async () => {
+		const exchanges: Array<{
+			method: string;
+			headers: Headers;
+			meta: unknown;
+			session: string | null;
+		}> = [];
+		const client = new Client(
+			{ name: "modern-test", version: "1.0.0" },
+			{
+				versionNegotiation: { mode: { pin: "2026-07-28" } },
+			},
+		);
+		const transport = new StreamableHTTPClientTransport(
+			new URL(`${baseUrl}${MCP_PATH}`),
+			{
+				fetch: async (url, init) => {
+					const response = await fetch(url, init);
+					if (init?.body && typeof init.body === "string") {
+						const body = JSON.parse(init.body);
+						exchanges.push({
+							method: body.method,
+							headers: new Headers(init.headers),
+							meta: body.params?._meta,
+							session: response.headers.get("Mcp-Session-Id"),
+						});
+					}
+					return response;
+				},
+			},
+		);
+		try {
+			await client.connect(transport);
+			expect(client.getProtocolEra()).toBe("modern");
+			const result = await client.listTools();
+			expect(result.tools.map((tool) => tool.name)).toContain("echo");
+			expect(result.ttlMs).toBe(0);
+			expect(result.cacheScope).toBe("private");
+			const echoed = await client.callTool({
+				name: "echo",
+				arguments: { message: "modern" },
+			});
+			expect(echoed.content).toEqual([{ type: "text", text: "modern" }]);
+			expect(exchanges.map((exchange) => exchange.method)).not.toContain(
+				"initialize",
+			);
+			const call = exchanges.find(
+				(exchange) => exchange.method === "tools/call",
+			);
+			expect(call?.headers.get("Mcp-Method")).toBe("tools/call");
+			expect(call?.headers.get("Mcp-Name")).toBe("echo");
+			expect(call?.headers.get("MCP-Protocol-Version")).toBe("2026-07-28");
+			expect(call?.meta).toMatchObject({
+				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+			});
+			expect(exchanges.every((exchange) => exchange.session === null)).toBe(
+				true,
+			);
+		} finally {
+			await client.close();
+		}
 	});
 
 	it("returns an enriched isError result (tool name + arg keys, no values) on handler throw", async () => {
