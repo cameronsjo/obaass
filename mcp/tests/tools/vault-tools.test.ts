@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
 import type { ToolDefinition } from "../../src/tools/types.js";
 import { VaultToolProvider } from "../../src/tools/vault-tools.js";
@@ -413,5 +413,74 @@ describe("VaultToolProvider — recent_files", () => {
 		const text = await callTool(tool, { count: 2 });
 		const files = JSON.parse(text) as unknown[];
 		expect(files.length).toBeLessThanOrEqual(2);
+	});
+});
+
+describe("VaultToolProvider — instruction and daily-note fallback branches", () => {
+	let vaultPath: string;
+	let config: Config;
+	let provider: VaultToolProvider;
+	beforeEach(async () => {
+		vaultPath = await makeTempVault();
+		config = makeConfig(vaultPath);
+		provider = new VaultToolProvider(new VaultService(vaultPath), config);
+	});
+	afterEach(async () => {
+		vi.useRealTimers();
+		await cleanupVault(vaultPath);
+	});
+	it("reports missing instructions, then includes both existing instruction files", async () => {
+		const tool = getTool(provider, "get_instructions");
+		expect(await callTool(tool, {})).toMatch(/No instruction files/);
+		await writeVaultFile(vaultPath, "CLAUDE.md", "Claude guidance");
+		await writeVaultFile(vaultPath, "AGENTS.md", "Agent guidance");
+		expect(await callTool(tool, {})).toBe(
+			"# CLAUDE.md\n\nClaude guidance\n\n---\n\n# AGENTS.md\n\nAgent guidance",
+		);
+	});
+	it("renders configured template date/title placeholders in the configured folder", async () => {
+		config.dailyNoteFolder = "Journal";
+		config.dailyNoteTemplate = "templates/daily.md";
+		await writeVaultFile(
+			vaultPath,
+			"templates/daily.md",
+			"# {{title}}\nDate: {{date}}",
+		);
+		await callTool(getTool(provider, "daily_note"), { date: "2026-10-14" });
+		expect(
+			await new VaultService(vaultPath).readFile("Journal/2026-10-14.md"),
+		).toBe("# 2026-10-14\nDate: 2026-10-14");
+	});
+	it("falls back to default content when a configured template is missing", async () => {
+		config.dailyNoteTemplate = "missing-template.md";
+		await callTool(getTool(provider, "daily_note"), { date: "2026-10-14" });
+		expect(
+			await new VaultService(vaultPath).readFile("Daily Notes/2026-10-14.md"),
+		).toContain("date: 2026-10-14");
+	});
+	it("uses today's UTC date when no date is supplied", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-14T12:00:00Z"));
+		await callTool(getTool(provider, "daily_note"), {});
+		expect(
+			await new VaultService(vaultPath).exists("Daily Notes/2026-10-14.md"),
+		).toBe(true);
+	});
+	it("appends before the next peer heading without moving its content", async () => {
+		await writeVaultFile(
+			vaultPath,
+			"note.md",
+			"## First\noriginal\n## Second\nkeep me",
+		);
+		await callTool(getTool(provider, "append_to_note"), {
+			path: "note.md",
+			heading: "First",
+			content: "new entry",
+		});
+		const content = await new VaultService(vaultPath).readFile("note.md");
+		expect(content.indexOf("new entry")).toBeLessThan(
+			content.indexOf("## Second"),
+		);
+		expect(content).toContain("## Second\nkeep me");
 	});
 });

@@ -231,6 +231,68 @@ describe("BackupToolProvider — backup_snapshots", () => {
 	});
 });
 
+describe("BackupToolProvider — valid diff, restore and incomplete log paths", () => {
+	let provider: BackupToolProvider;
+	beforeEach(() => {
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			cb(null, { stdout: "" });
+		});
+		provider = new BackupToolProvider(makeStubClient(), "/vault");
+	});
+	it("diffs a valid explicit range and keeps the path after the option boundary", async () => {
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			cb(null, { stdout: "diff output" });
+		});
+		expect(
+			await callTool(provider, "backup_diff", {
+				commit: "abc1234",
+				compareTo: "def5678",
+				path: "--note.md",
+			}),
+		).toBe("diff output");
+		expect(mockExecFile).toHaveBeenCalledWith(
+			"git",
+			["-C", "/vault", "diff", "abc1234..def5678", "--", "--note.md"],
+			expect.any(Object),
+			expect.any(Function),
+		);
+	});
+	it("uses the parent range and reports an empty diff without a file filter", async () => {
+		expect(await callTool(provider, "backup_diff", { commit: "abc1234" })).toBe(
+			"No differences found.",
+		);
+		expect(mockExecFile).toHaveBeenCalledWith(
+			"git",
+			["-C", "/vault", "diff", "abc1234~1..abc1234"],
+			expect.any(Object),
+			expect.any(Function),
+		);
+	});
+	it("restores a valid revision using the path option boundary", async () => {
+		expect(
+			await callTool(provider, "backup_restore", {
+				commit: "abc1234",
+				path: "--note.md",
+			}),
+		).toBe("Restored '--note.md' from commit abc1234.");
+		expect(mockExecFile).toHaveBeenCalledWith(
+			"git",
+			["-C", "/vault", "checkout", "abc1234", "--", "--note.md"],
+			expect.any(Object),
+			expect.any(Function),
+		);
+	});
+	it("ignores incomplete git log records rather than emitting malformed commits", async () => {
+		mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+			cb(null, { stdout: "hash\nshort\n---\n" });
+		});
+		expect(JSON.parse(await callTool(provider, "backup_history", {}))).toEqual({
+			count: 0,
+			commits: [],
+		});
+	});
+});
+
 describe("BackupToolProvider — tool-name set", () => {
 	it("exposes the expected backup tool names", () => {
 		const provider = new BackupToolProvider(makeStubClient(), "/vault");

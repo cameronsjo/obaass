@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Refresh the security dependency group and align Vitest/coverage-v8 at 5.0.4
+  so clean installs no longer fail peer resolution. Development now requires
+  Node 22.12+, 24, or 26+ as supported by Vitest 5; coverage floors are unchanged.
+
 - Await asynchronous MCP cleanup before successful process exit, while HTTP
   shutdown starts concurrently and the existing ten-second timeout remains.
 
