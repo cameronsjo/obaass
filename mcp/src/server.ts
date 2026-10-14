@@ -1,6 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import express, { type Request, type Response } from "express";
+import { httpSecurityMiddleware } from "./http-security.js";
 import { logger } from "./logger.js";
 import type { ToolRegistry } from "./tools/index.js";
 
@@ -9,46 +10,30 @@ const JSONRPC_INTERNAL_ERROR = -32603;
 
 export function createMcpApp(registry: ToolRegistry, mcpPath: string) {
 	const app = express();
+	app.use(httpSecurityMiddleware());
 	app.use(express.json());
-
-	app.post(mcpPath, async (req: Request, res: Response) => {
-		// The MCP SDK's stateless pattern binds one server to one transport per
-		// request; both must be torn down when the response closes or they leak.
-		const server = createServer(registry);
-		const transport = new StreamableHTTPServerTransport({
-			sessionIdGenerator: undefined,
-		});
-
-		res.on("close", () => {
-			transport.close();
-			server.close();
-		});
-
-		try {
-			await server.connect(transport);
-			await transport.handleRequest(req, res, req.body);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			logger.error("MCP request handling failed", { error: message });
-			if (!res.headersSent) {
-				res.status(500).json({
-					jsonrpc: "2.0",
-					error: {
-						code: JSONRPC_INTERNAL_ERROR,
-						message: "Internal server error",
-					},
-					id: null,
-				});
-			}
-		}
+	const onerror = (error: Error) => {
+		logger.error("MCP request handling failed", { error: error.message });
+	};
+	// Fresh server per request for both 2026-07-28 and older stateless clients.
+	const handler = createMcpHandler(() => createServer(registry), {
+		legacy: "stateless",
+		// This app publishes no events; do not retain idle subscription streams.
+		maxSubscriptions: 0,
+		onerror,
 	});
+	const nodeHandler = toNodeHandler(handler, { onerror });
+	// Keep express.json's existing body limit and pass its consumed body explicitly.
+	app.post(mcpPath, (req: Request, res: Response) =>
+		nodeHandler(req, res, req.body),
+	);
 
-	// This server is stateless (no SSE stream / session resumption), so GET and
-	// DELETE on the MCP endpoint are not supported.
+	// GET-based SSE and session resumption remain unsupported; modern exchanges
+	// and legacy stateless requests are served through POST.
 	app.get(mcpPath, methodNotAllowed);
 	app.delete(mcpPath, methodNotAllowed);
 
-	return { app };
+	return { app, close: handler.close };
 }
 
 function methodNotAllowed(_req: Request, res: Response): void {
@@ -80,7 +65,7 @@ function createServer(registry: ToolRegistry): McpServer {
 			tool.name,
 			{
 				description: tool.description,
-				inputSchema: tool.inputSchema.shape,
+				inputSchema: tool.inputSchema,
 				...(tool.outputSchema && { outputSchema: tool.outputSchema }),
 			},
 			async (params) => {

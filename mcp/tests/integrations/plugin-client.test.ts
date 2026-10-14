@@ -8,6 +8,7 @@ import { ToolRegistry } from "../../src/tools/index.js";
 describe("PluginClient against the upgraded SDK over real HTTP", () => {
 	let server: Server;
 	let client: PluginClient;
+	let closeMcp: () => Promise<void>;
 	beforeEach(async () => {
 		const registry = new ToolRegistry();
 		registry.register({
@@ -32,7 +33,8 @@ describe("PluginClient against the upgraded SDK over real HTTP", () => {
 				},
 			],
 		});
-		const { app } = createMcpApp(registry, "/mcp");
+		const { app, close } = createMcpApp(registry, "/mcp");
+		closeMcp = close;
 		await new Promise<void>((resolve) => {
 			server = app.listen(0, "127.0.0.1", resolve);
 		});
@@ -43,6 +45,7 @@ describe("PluginClient against the upgraded SDK over real HTTP", () => {
 	});
 	afterEach(async () => {
 		await client.disconnect();
+		await closeMcp();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 	it("auto-connects, checks tools for health, handles non-text content and reconnects", async () => {
