@@ -3,16 +3,30 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import { escapeRegex } from "../util.js";
 import { updateFrontmatter } from "../vault/frontmatter.js";
-import type { VaultService } from "../vault/vault-service.js";
+import type { DirectoryEntry, VaultService } from "../vault/vault-service.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
 
 function textResult(text: string): CallToolResult {
 	return { content: [{ type: "text", text }] };
 }
 
-function jsonResult(data: unknown): CallToolResult {
-	return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+function jsonResult(
+	data: Record<string, unknown>,
+	textData: unknown = data,
+): CallToolResult {
+	return {
+		content: [{ type: "text", text: JSON.stringify(textData, null, 2) }],
+		structuredContent: data,
+	};
 }
+
+const directoryEntrySchema: z.ZodType<DirectoryEntry> = z.lazy(() =>
+	z.object({
+		name: z.string(),
+		type: z.enum(["file", "directory"]),
+		children: z.array(directoryEntrySchema).optional(),
+	}),
+);
 
 export class VaultToolProvider implements ToolProvider {
 	id = "vault";
@@ -179,6 +193,16 @@ export class VaultToolProvider implements ToolProvider {
 	private searchContent(): ToolDefinition {
 		return {
 			name: "search_content",
+			outputSchema: z.object({
+				count: z.number().int().nonnegative(),
+				results: z.array(
+					z.object({
+						path: z.string(),
+						line: z.number().int().positive(),
+						text: z.string(),
+					}),
+				),
+			}),
 			description:
 				"Search for text or a regex pattern across all markdown files in the vault. " +
 				"Example: {query: 'TODO'} for literal text, or {query: '#[a-z]+', regex: true}. " +
@@ -221,6 +245,7 @@ export class VaultToolProvider implements ToolProvider {
 	private vaultStructure(): ToolDefinition {
 		return {
 			name: "vault_structure",
+			outputSchema: z.object({ entries: z.array(directoryEntrySchema) }),
 			description: "Get the vault's directory tree structure.",
 			inputSchema: z.object({
 				path: z
@@ -231,7 +256,7 @@ export class VaultToolProvider implements ToolProvider {
 			handler: async (params) => {
 				const { path } = params as { path?: string };
 				const structure = await this.vault.getStructure(path);
-				return jsonResult(structure);
+				return jsonResult({ entries: structure }, structure);
 			},
 		};
 	}
@@ -239,6 +264,22 @@ export class VaultToolProvider implements ToolProvider {
 	private fileMetadata(): ToolDefinition {
 		return {
 			name: "file_metadata",
+			outputSchema: z.object({
+				path: z.string(),
+				// The parser preserves any valid YAML root, including scalars/sequences.
+				frontmatter: z.unknown(),
+				tags: z.array(z.string()),
+				headings: z.array(
+					z.object({ level: z.number().int(), text: z.string() }),
+				),
+				wikilinks: z.array(
+					z.object({
+						path: z.string(),
+						alias: z.string().optional(),
+						heading: z.string().optional(),
+					}),
+				),
+			}),
 			description:
 				"Get metadata for a note: frontmatter properties, tags, headings, and wikilinks.",
 			inputSchema: z.object({
@@ -247,7 +288,7 @@ export class VaultToolProvider implements ToolProvider {
 			handler: async (params) => {
 				const { path } = params as { path: string };
 				const metadata = await this.vault.getMetadata(path);
-				return jsonResult(metadata);
+				return jsonResult({ ...metadata });
 			},
 		};
 	}
@@ -255,6 +296,10 @@ export class VaultToolProvider implements ToolProvider {
 	private vaultTags(): ToolDefinition {
 		return {
 			name: "vault_tags",
+			outputSchema: z.object({
+				count: z.number().int().nonnegative(),
+				tags: z.record(z.number().int().nonnegative()),
+			}),
 			description:
 				"Get all tags used across the vault with their usage counts. Takes no arguments. " +
 				"To find the notes carrying a given tag, use search_by_tag.",
@@ -273,6 +318,10 @@ export class VaultToolProvider implements ToolProvider {
 	private searchByTag(): ToolDefinition {
 		return {
 			name: "search_by_tag",
+			outputSchema: z.object({
+				count: z.number().int().nonnegative(),
+				files: z.array(z.string()),
+			}),
 			description:
 				"Find all notes that have a specific tag (in frontmatter or inline).",
 			inputSchema: z.object({
@@ -289,6 +338,10 @@ export class VaultToolProvider implements ToolProvider {
 	private searchByProperty(): ToolDefinition {
 		return {
 			name: "search_by_property",
+			outputSchema: z.object({
+				count: z.number().int().nonnegative(),
+				results: z.array(z.object({ path: z.string(), value: z.unknown() })),
+			}),
 			description:
 				"Find notes by frontmatter property name and optional value.",
 			inputSchema: z.object({
@@ -314,6 +367,15 @@ export class VaultToolProvider implements ToolProvider {
 	private recentFiles(): ToolDefinition {
 		return {
 			name: "recent_files",
+			outputSchema: z.object({
+				files: z.array(
+					z.object({
+						path: z.string(),
+						modified: z.string(),
+						size: z.number().nonnegative(),
+					}),
+				),
+			}),
 			description:
 				"Get recently modified files in the vault, sorted newest first.",
 			inputSchema: z.object({
@@ -328,13 +390,12 @@ export class VaultToolProvider implements ToolProvider {
 			handler: async (params) => {
 				const { count } = params as { count?: number };
 				const files = await this.vault.getRecentFiles(count);
-				return jsonResult(
-					files.map((f) => ({
-						path: f.path,
-						modified: new Date(f.mtimeMs).toISOString(),
-						size: f.size,
-					})),
-				);
+				const recent = files.map((f) => ({
+					path: f.path,
+					modified: new Date(f.mtimeMs).toISOString(),
+					size: f.size,
+				}));
+				return jsonResult({ files: recent }, recent);
 			},
 		};
 	}

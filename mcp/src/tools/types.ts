@@ -5,6 +5,7 @@ export interface ToolDefinition {
 	name: string;
 	description: string;
 	inputSchema: z.ZodObject<z.ZodRawShape>;
+	outputSchema?: z.ZodObject<z.ZodRawShape>;
 	handler: (params: Record<string, unknown>) => Promise<CallToolResult>;
 }
 
