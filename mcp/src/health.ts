@@ -1,4 +1,6 @@
+import { stat } from "node:fs/promises";
 import type { Request, Response } from "express";
+import { hasValidBearer } from "./auth.js";
 import type { Config } from "./config.js";
 import type { BackupClient } from "./integrations/backup-client.js";
 import type { PluginClient } from "./integrations/plugin-client.js";
@@ -13,8 +15,24 @@ export interface HealthDeps {
 }
 
 export function createHealthHandler(deps: HealthDeps) {
-	return async (_req: Request, res: Response): Promise<void> => {
+	return async (req: Request, res: Response): Promise<void> => {
 		const { config, vault, backupClient, pluginClient, startTime } = deps;
+
+		// Callers without the token, and everyone in unauthenticated read-only
+		// mode, get status only: no vault path, internal URLs, scan, or probes.
+		const detailed = config.authToken
+			? hasValidBearer(req, config.authToken)
+			: !config.readOnly;
+		if (!detailed) {
+			const up = await stat(config.vaultPath).then(
+				(s) => s.isDirectory(),
+				() => false,
+			);
+			res
+				.status(up ? 200 : 503)
+				.json({ status: up ? "ok" : "degraded", name: "obaass-mcp" });
+			return;
+		}
 
 		let vaultAccessible = false;
 		let fileCount = 0;

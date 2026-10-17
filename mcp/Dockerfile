@@ -27,6 +27,9 @@ COPY --from=builder /app/dist ./dist
 RUN addgroup -g 1001 nodejs && adduser -u 1001 -G nodejs -D nodejs
 USER nodejs
 
+# A container must bind all interfaces for its published port to work, so the
+# server refuses to start until MCP_AUTH_TOKEN (or the read-only opt-out
+# MCP_ALLOW_UNAUTHENTICATED=true) is supplied at run time. Never bake the token in.
 ENV NODE_ENV=production \
     MCP_HTTP_PORT=3000 \
     MCP_HTTP_HOST=0.0.0.0 \

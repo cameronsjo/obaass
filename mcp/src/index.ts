@@ -20,7 +20,11 @@ async function main() {
 		port: config.httpPort,
 		backupEnabled: !!config.backupUrl,
 		pluginEnabled: !!config.pluginMcpUrl,
+		host: config.httpHost,
+		authRequired: !!config.authToken,
+		readOnly: config.readOnly,
 	});
+	if (config.accessWarning) logger.warn(config.accessWarning);
 
 	// Core services
 	const vault = new VaultService(config.vaultPath);
@@ -46,7 +50,10 @@ async function main() {
 	}
 
 	// Create MCP app
-	const { app, close } = createMcpApp(registry, config.httpPath);
+	const { app, close } = createMcpApp(registry, config.httpPath, {
+		authToken: config.authToken,
+		readOnly: config.readOnly,
+	});
 
 	// Health endpoint
 	const startTime = Date.now();
@@ -63,7 +70,7 @@ async function main() {
 
 	// Start server
 	const httpServer = app.listen(config.httpPort, config.httpHost, () => {
-		const tools = registry.getAllTools();
+		const tools = registry.getServedTools(config.readOnly);
 		logger.info("obaass-mcp ready", {
 			address: `http://${config.httpHost}:${config.httpPort}`,
 			mcpPath: config.httpPath,

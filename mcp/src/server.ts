@@ -1,6 +1,7 @@
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import express, { type Request, type Response } from "express";
+import { bearerAuthMiddleware } from "./auth.js";
 import { httpSecurityMiddleware } from "./http-security.js";
 import { logger } from "./logger.js";
 import type { ToolRegistry } from "./tools/index.js";
@@ -8,20 +9,38 @@ import type { ToolRegistry } from "./tools/index.js";
 /** JSON-RPC internal-error code (per the spec). */
 const JSONRPC_INTERNAL_ERROR = -32603;
 
-export function createMcpApp(registry: ToolRegistry, mcpPath: string) {
+export interface McpAppOptions {
+	/** Require `Authorization: Bearer <token>` on the MCP path (not /health). */
+	authToken?: string | undefined;
+	/** Serve only tools marked `readOnly`. */
+	readOnly?: boolean;
+}
+
+export function createMcpApp(
+	registry: ToolRegistry,
+	mcpPath: string,
+	options: McpAppOptions = {},
+) {
 	const app = express();
 	app.use(httpSecurityMiddleware());
+	// Before body parsing so an unauthenticated request never reaches the parser.
+	if (options.authToken) {
+		app.use(mcpPath, bearerAuthMiddleware(options.authToken));
+	}
 	app.use(express.json());
 	const onerror = (error: Error) => {
 		logger.error("MCP request handling failed", { error: error.message });
 	};
 	// Fresh server per request for both 2026-07-28 and older stateless clients.
-	const handler = createMcpHandler(() => createServer(registry), {
-		legacy: "stateless",
-		// This app publishes no events; do not retain idle subscription streams.
-		maxSubscriptions: 0,
-		onerror,
-	});
+	const handler = createMcpHandler(
+		() => createServer(registry, !!options.readOnly),
+		{
+			legacy: "stateless",
+			// This app publishes no events; do not retain idle subscription streams.
+			maxSubscriptions: 0,
+			onerror,
+		},
+	);
 	const nodeHandler = toNodeHandler(handler, { onerror });
 	// Keep express.json's existing body limit and pass its consumed body explicitly.
 	app.post(mcpPath, (req: Request, res: Response) =>
@@ -54,21 +73,29 @@ function describeInputKeys(input: unknown): string {
 	return ` (args: ${shown.join(", ")}${suffix})`;
 }
 
-function createServer(registry: ToolRegistry): McpServer {
+function createServer(registry: ToolRegistry, readOnly: boolean): McpServer {
 	const server = new McpServer({
 		name: "obaass-mcp",
 		version: "0.1.0",
 	});
 
-	for (const tool of registry.getAllTools()) {
+	for (const tool of registry.getServedTools(readOnly)) {
 		server.registerTool(
 			tool.name,
 			{
 				description: tool.description,
 				inputSchema: tool.inputSchema,
 				...(tool.outputSchema && { outputSchema: tool.outputSchema }),
+				annotations: { readOnlyHint: tool.readOnly === true },
 			},
 			async (params) => {
+				if (!tool.readOnly) {
+					// Audit trail for state-changing calls; keys only, never values.
+					logger.info("Dispatching write tool", {
+						tool: tool.name,
+						args: describeInputKeys(params),
+					});
+				}
 				try {
 					return await tool.handler(params as Record<string, unknown>);
 				} catch (err) {
