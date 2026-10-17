@@ -20,12 +20,17 @@ describe("/health with a configured token", () => {
 	});
 	afterEach(() => cleanupVault(vaultPath));
 
-	async function probe(authorization?: string, path = vaultPath) {
+	async function probe(
+		authorization?: string,
+		path = vaultPath,
+		extra: Partial<Config> = {},
+	) {
 		const handler = createHealthHandler({
 			config: {
 				vaultPath: path,
 				authToken: TOKEN,
 				backupUrl: "http://user:pass@backup:8080",
+				...extra,
 			} as Config,
 			vault: { listMarkdownFiles } as unknown as VaultService,
 			backupClient: { isHealthy } as unknown as BackupClient,
@@ -71,5 +76,22 @@ describe("/health with a configured token", () => {
 			vault: { path: vaultPath, fileCount: 1 },
 			integrations: { backup: { healthy: true } },
 		});
+	});
+
+	it("gives everyone status only in unauthenticated read-only mode", async () => {
+		const { body } = await probe(undefined, vaultPath, {
+			authToken: undefined,
+			readOnly: true,
+		});
+		expect(body).toEqual({ status: "ok", name: "obaass-mcp" });
+		expect(listMarkdownFiles).not.toHaveBeenCalled();
+	});
+
+	it("keeps the full report on a tokenless loopback bind", async () => {
+		const { body } = await probe(undefined, vaultPath, {
+			authToken: undefined,
+			readOnly: false,
+		});
+		expect(body).toMatchObject({ vault: { path: vaultPath } });
 	});
 });

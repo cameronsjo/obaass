@@ -186,7 +186,7 @@ The Host check is not a credential: any non-browser client can send
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_HTTP_HOST` | `127.0.0.1` | Bind address. Anything other than a loopback IP (`127.0.0.0/8`, `::1`) needs `MCP_AUTH_TOKEN`; the name `localhost` counts as non-loopback. |
-| `MCP_AUTH_TOKEN` | unset | Bearer token required on the MCP path. At least 32 characters. Without it, `/health` returns status only. |
+| `MCP_AUTH_TOKEN` | unset | Bearer token required on the MCP path. At least 32 characters. When set, `/health` gives callers without it status only. |
 | `MCP_ALLOW_UNAUTHENTICATED` | `false` | Start on a non-loopback bind without a token, serving read-only tools only. |
 
 | Bind | Token | Result |
@@ -194,7 +194,7 @@ The Host check is not a credential: any non-browser client can send
 | loopback | unset | Starts; no credential (local clients only) |
 | any | set | Starts; every MCP request needs `Authorization: Bearer <token>` |
 | non-loopback, or loopback with `MCP_ALLOWED_HOSTS` set | unset | Refuses to start |
-| same | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts read-only; write tools are not registered |
+| same | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts read-only; write tools are not registered; `/health` gives status only |
 
 A non-empty `MCP_ALLOWED_HOSTS` means a proxy or remote name is expected to
 reach the server, so it needs a token even on a loopback bind. Read-only mode

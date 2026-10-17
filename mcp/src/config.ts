@@ -8,9 +8,13 @@ const configSchema = z.object({
 	httpHost: z.string().default("127.0.0.1"),
 	httpPath: z
 		.string()
-		.regex(/^\/[^\s?#]+$/, "MCP_HTTP_PATH must be a path below / such as /mcp")
-		.refine((path) => path.toLowerCase() !== "/health", {
-			message: "MCP_HTTP_PATH must not be /health",
+		// Literal segments only: Express would compile `:x` or `*` as a pattern.
+		.regex(
+			/^(\/[A-Za-z0-9._~-]+)+$/,
+			"MCP_HTTP_PATH must be a literal path below / such as /mcp",
+		)
+		.refine((path) => !/^\/health(\/|$)/i.test(path), {
+			message: "MCP_HTTP_PATH must not be under /health",
 		})
 		.default("/mcp"),
 	logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),

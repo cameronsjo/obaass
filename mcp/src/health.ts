@@ -18,9 +18,12 @@ export function createHealthHandler(deps: HealthDeps) {
 	return async (req: Request, res: Response): Promise<void> => {
 		const { config, vault, backupClient, pluginClient, startTime } = deps;
 
-		// With a token configured, callers without it get status only: no vault
-		// path, internal URLs, full vault scan, or outbound probes.
-		if (config.authToken && !hasValidBearer(req, config.authToken)) {
+		// Callers without the token, and everyone in unauthenticated read-only
+		// mode, get status only: no vault path, internal URLs, scan, or probes.
+		const detailed = config.authToken
+			? hasValidBearer(req, config.authToken)
+			: !config.readOnly;
+		if (!detailed) {
 			const up = await stat(config.vaultPath).then(
 				(s) => s.isDirectory(),
 				() => false,

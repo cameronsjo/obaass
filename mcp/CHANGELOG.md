@@ -11,9 +11,10 @@
   tools only. Write tools (`create_note`, `append_to_note`, `delete_note`,
   `delete`, `set_frontmatter`, `rename`, `daily_note`, `backup_restore`,
   `run_dataview_query`) are never reachable off loopback without the token.
-  With a token set, `/health` returns status only to callers without it.
+  `/health` returns status only to callers without the token, and to everyone
+  in read-only mode.
   Tools advertise `annotations.readOnlyHint`; write-tool calls are logged.
-  `MCP_HTTP_PATH` must be a path below `/` other than `/health`.
+  `MCP_HTTP_PATH` must be a literal path below `/`, not under `/health`.
 
 - Refresh the security dependency group and align Vitest/coverage-v8 at 5.0.4
   so clean installs no longer fail peer resolution. Development now requires

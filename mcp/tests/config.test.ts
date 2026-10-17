@@ -122,13 +122,25 @@ describe("loadConfig", () => {
 			expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
 		});
 
-		it.each(["/", "/health", "/HEALTH", "mcp", "/mcp?x"])(
-			"rejects MCP_HTTP_PATH %j",
-			(value) => {
-				process.env.MCP_HTTP_PATH = value;
-				expect(() => loadConfig()).toThrow(/MCP_HTTP_PATH/);
-			},
-		);
+		it.each([
+			"/",
+			"/health",
+			"/HEALTH",
+			"/health/x",
+			"mcp",
+			"/mcp?x",
+			"/*splat",
+			"/:x",
+			"/mcp/",
+		])("rejects MCP_HTTP_PATH %j", (value) => {
+			process.env.MCP_HTTP_PATH = value;
+			expect(() => loadConfig()).toThrow(/MCP_HTTP_PATH/);
+		});
+
+		it("accepts a nested literal MCP_HTTP_PATH", () => {
+			process.env.MCP_HTTP_PATH = "/api/mcp-v2";
+			expect(loadConfig().httpPath).toBe("/api/mcp-v2");
+		});
 
 		it("treats an empty MCP_AUTH_TOKEN as unset", () => {
 			process.env.MCP_AUTH_TOKEN = "";
