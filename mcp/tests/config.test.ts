@@ -23,6 +23,7 @@ describe("loadConfig", () => {
 			"DAILY_NOTE_TEMPLATE",
 			"MCP_AUTH_TOKEN",
 			"MCP_ALLOW_UNAUTHENTICATED",
+			"MCP_ALLOWED_HOSTS",
 		]) {
 			delete process.env[k];
 		}
@@ -108,6 +109,26 @@ describe("loadConfig", () => {
 			expect(config.readOnly).toBe(true);
 			expect(config.accessWarning).toMatch(/read-only/);
 		});
+
+		it("refuses a tokenless loopback bind when MCP_ALLOWED_HOSTS is set", () => {
+			process.env.MCP_ALLOWED_HOSTS = "vault.example.ts.net";
+			expect(() => loadConfig()).toThrow(/MCP_ALLOWED_HOSTS/);
+			process.env.MCP_AUTH_TOKEN = token;
+			expect(loadConfig().readOnly).toBe(false);
+		});
+
+		it("refuses a localhost name bind without a token", () => {
+			process.env.MCP_HTTP_HOST = "localhost";
+			expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
+		});
+
+		it.each(["/", "/health", "/HEALTH", "mcp", "/mcp?x"])(
+			"rejects MCP_HTTP_PATH %j",
+			(value) => {
+				process.env.MCP_HTTP_PATH = value;
+				expect(() => loadConfig()).toThrow(/MCP_HTTP_PATH/);
+			},
+		);
 
 		it("treats an empty MCP_AUTH_TOKEN as unset", () => {
 			process.env.MCP_AUTH_TOKEN = "";

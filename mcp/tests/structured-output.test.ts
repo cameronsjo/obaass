@@ -120,6 +120,16 @@ describe.each(["legacy", "modern"] as const)(
 			await cleanupVault(vaultPath);
 		});
 
+		it("advertises readOnlyHint from each tool's read-only classification", async () => {
+			const { tools } = await client.listTools();
+			const hint = (name: string) =>
+				tools.find((tool) => tool.name === name)?.annotations?.readOnlyHint;
+			expect(hint("read_note")).toBe(true);
+			expect(hint("backup_status")).toBe(true);
+			expect(hint("create_note")).toBe(false);
+			expect(hint("backup_restore")).toBe(false);
+		});
+
 		it("accepts health field drift and omitted optional uptime", async () => {
 			healthPayload = {
 				status: "healthy",

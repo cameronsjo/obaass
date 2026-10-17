@@ -31,11 +31,11 @@ export class PluginToolProvider implements ToolProvider {
 		description: string,
 		inputSchema: z.ZodObject,
 		pluginToolName: string,
+		readOnly: boolean,
 	): ToolDefinition {
 		return {
 			name,
-			// Every proxied plugin tool is a query (search, backlinks, graph, Dataview).
-			readOnly: true,
+			...(readOnly && { readOnly: true as const }),
 			description: `${description} (requires obsidi-mcp plugin)`,
 			inputSchema,
 			handler: async (params) => {
@@ -68,6 +68,7 @@ export class PluginToolProvider implements ToolProvider {
 				limit: z.number().optional().describe("Max results (default: 10)"),
 			}),
 			"semantic_search",
+			true,
 		);
 	}
 
@@ -80,6 +81,7 @@ export class PluginToolProvider implements ToolProvider {
 				path: z.string().describe("Vault-relative path to find backlinks for"),
 			}),
 			"backlinks",
+			true,
 		);
 	}
 
@@ -93,6 +95,7 @@ export class PluginToolProvider implements ToolProvider {
 				depth: z.number().optional().describe("Traversal depth (default: 1)"),
 			}),
 			"graph_neighbors",
+			true,
 		);
 	}
 
@@ -105,6 +108,8 @@ export class PluginToolProvider implements ToolProvider {
 				query: z.string().describe("DQL query string"),
 			}),
 			"run_dataview_query",
+			// Not read-only: the remote plugin may evaluate DataviewJS, which runs code.
+			false,
 		);
 	}
 }

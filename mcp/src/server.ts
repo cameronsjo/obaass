@@ -86,8 +86,16 @@ function createServer(registry: ToolRegistry, readOnly: boolean): McpServer {
 				description: tool.description,
 				inputSchema: tool.inputSchema,
 				...(tool.outputSchema && { outputSchema: tool.outputSchema }),
+				annotations: { readOnlyHint: tool.readOnly === true },
 			},
 			async (params) => {
+				if (!tool.readOnly) {
+					// Audit trail for state-changing calls; keys only, never values.
+					logger.info("Dispatching write tool", {
+						tool: tool.name,
+						args: describeInputKeys(params),
+					});
+				}
 				try {
 					return await tool.handler(params as Record<string, unknown>);
 				} catch (err) {

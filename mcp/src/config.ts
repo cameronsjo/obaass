@@ -6,7 +6,13 @@ const configSchema = z.object({
 	vaultPath: z.string().min(1, "VAULT_PATH is required"),
 	httpPort: z.coerce.number().int().positive().default(3000),
 	httpHost: z.string().default("127.0.0.1"),
-	httpPath: z.string().default("/mcp"),
+	httpPath: z
+		.string()
+		.regex(/^\/[^\s?#]+$/, "MCP_HTTP_PATH must be a path below / such as /mcp")
+		.refine((path) => path.toLowerCase() !== "/health", {
+			message: "MCP_HTTP_PATH must not be /health",
+		})
+		.default("/mcp"),
 	logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	backupUrl: z.string().url().optional(),
 	pluginMcpUrl: z.string().url().optional(),
@@ -55,10 +61,12 @@ export function loadConfig(): Config {
 	assertVaultPathUsable(parsed.vaultPath);
 
 	// Refuses to start when write tools would be reachable off loopback unauthenticated.
-	const access = resolveAccessPolicy(parsed);
+	const access = resolveAccessPolicy({
+		...parsed,
+		hasAllowedHosts: !!process.env.MCP_ALLOWED_HOSTS?.trim(),
+	});
 	return {
 		...parsed,
-		authToken: access.authToken,
 		readOnly: access.readOnly,
 		accessWarning: access.warning,
 	};

@@ -1,8 +1,10 @@
 import { type Server, request } from "node:http";
+import type { Request, Response } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
 	MIN_AUTH_TOKEN_LENGTH,
+	bearerAuthMiddleware,
 	isLoopbackHost,
 	resolveAccessPolicy,
 	tokensMatch,
@@ -20,15 +22,9 @@ import type { VaultService } from "../src/vault/vault-service.js";
 const TOKEN = "t".repeat(MIN_AUTH_TOKEN_LENGTH);
 
 describe("isLoopbackHost", () => {
-	it.each([
-		"127.0.0.1",
-		"127.8.9.10",
-		"::1",
-		"[::1]",
-		"localhost",
-		"LOCALHOST",
-	])("treats %s as loopback", (host) =>
-		expect(isLoopbackHost(host)).toBe(true),
+	it.each(["127.0.0.1", "127.8.9.10", "::1", "[::1]"])(
+		"treats %s as loopback",
+		(host) => expect(isLoopbackHost(host)).toBe(true),
 	);
 	it.each([
 		"0.0.0.0",
@@ -36,6 +32,8 @@ describe("isLoopbackHost", () => {
 		"192.168.1.10",
 		"100.100.100.100",
 		"vault.example.ts.net",
+		"localhost",
+		"LOCALHOST",
 		"localhost.evil.invalid",
 		"::ffff:192.168.1.10",
 		"",
@@ -45,36 +43,48 @@ describe("isLoopbackHost", () => {
 });
 
 describe("resolveAccessPolicy", () => {
+	const base = { allowUnauthenticated: false, hasAllowedHosts: false };
+
 	it("leaves a loopback bind with no token open, with write tools", () => {
-		expect(
-			resolveAccessPolicy({
-				httpHost: "127.0.0.1",
-				allowUnauthenticated: false,
-			}),
-		).toEqual({ authToken: undefined, readOnly: false, warning: undefined });
+		expect(resolveAccessPolicy({ ...base, httpHost: "127.0.0.1" })).toEqual({
+			readOnly: false,
+			warning: undefined,
+		});
 	});
-	it("requires the token whenever one is set, on any bind", () => {
-		for (const httpHost of ["127.0.0.1", "0.0.0.0"]) {
-			expect(
-				resolveAccessPolicy({
-					httpHost,
-					authToken: TOKEN,
-					allowUnauthenticated: false,
-				}),
-			).toEqual({ authToken: TOKEN, readOnly: false, warning: undefined });
+	it("allows any bind once a token is set", () => {
+		for (const hasAllowedHosts of [false, true]) {
+			for (const httpHost of ["127.0.0.1", "0.0.0.0"]) {
+				expect(
+					resolveAccessPolicy({
+						...base,
+						httpHost,
+						hasAllowedHosts,
+						authToken: TOKEN,
+					}),
+				).toEqual({ readOnly: false, warning: undefined });
+			}
 		}
 	});
 	it("refuses a non-loopback bind with no token", () => {
+		expect(() => resolveAccessPolicy({ ...base, httpHost: "0.0.0.0" })).toThrow(
+			/MCP_AUTH_TOKEN.*MCP_ALLOW_UNAUTHENTICATED/s,
+		);
+	});
+	it("refuses a tokenless loopback bind that MCP_ALLOWED_HOSTS opens to proxies", () => {
 		expect(() =>
-			resolveAccessPolicy({ httpHost: "0.0.0.0", allowUnauthenticated: false }),
-		).toThrow(/MCP_AUTH_TOKEN.*MCP_ALLOW_UNAUTHENTICATED/s);
+			resolveAccessPolicy({
+				...base,
+				httpHost: "127.0.0.1",
+				hasAllowedHosts: true,
+			}),
+		).toThrow(/MCP_ALLOWED_HOSTS.*MCP_AUTH_TOKEN/s);
 	});
 	it("starts read-only with a warning when the operator opts out", () => {
 		const policy = resolveAccessPolicy({
+			...base,
 			httpHost: "0.0.0.0",
 			allowUnauthenticated: true,
 		});
-		expect(policy.authToken).toBeUndefined();
 		expect(policy.readOnly).toBe(true);
 		expect(policy.warning).toMatch(/read-only/);
 	});
@@ -101,6 +111,7 @@ describe("read-only tool classification", () => {
 				"delete",
 				"delete_note",
 				"rename",
+				"run_dataview_query",
 				"set_frontmatter",
 			].sort(),
 		);
@@ -321,11 +332,36 @@ describe("MCP bearer auth and read-only mode over real HTTP", () => {
 		});
 		it("does not expose tools that are not marked read-only", async () => {
 			const res = await callTool("write");
-			const body = JSON.parse(res.body);
-			const text = JSON.stringify(body);
-			expect(text).toMatch(/write/);
-			expect(body.result?.content?.[0]?.text).not.toBe("wrote");
+			expect(JSON.parse(res.body)).toMatchObject({
+				error: { code: -32602, message: "Tool write not found" },
+			});
 			expect(write).not.toHaveBeenCalled();
 		});
+	});
+});
+
+describe("bearer rejection logging", () => {
+	it("logs the first rejection, then at most once per window with a count", async () => {
+		const { logger } = await import("../src/logger.js");
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		let clock = 0;
+		const middleware = bearerAuthMiddleware(TOKEN, () => clock);
+		const res = {
+			status: () => res,
+			set: () => res,
+			json: () => res,
+		} as unknown as Response;
+		const req = { headers: {}, socket: {} } as Request;
+		const next = vi.fn();
+		for (let i = 0; i < 5; i++) middleware(req, res, next);
+		expect(warn).toHaveBeenCalledOnce();
+		clock = 60_000;
+		middleware(req, res, next);
+		expect(warn).toHaveBeenCalledTimes(2);
+		expect(warn.mock.calls[1]?.[1]).toMatchObject({
+			suppressedSinceLastLog: 4,
+		});
+		expect(next).not.toHaveBeenCalled();
+		warn.mockRestore();
 	});
 });

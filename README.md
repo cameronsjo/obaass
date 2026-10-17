@@ -171,7 +171,12 @@ that exact scheme and port (default 80/443 if omitted). Wildcards, credentials,
 paths and query strings are rejected. Loopback defaults remain allowed when this
 variable is set. `X-Forwarded-Host`/`X-Forwarded-Proto` never expand the allowlist;
 add a proxy's public HTTPS origin explicitly. This is not authentication: continue
-to protect network access and configure gateway authorization separately.
+to protect network access and configure gateway authorization separately. The
+standalone `mcp/` service adds its own credential check, described below.
+
+The compose example passes `MCP_ALLOWED_HOSTS` to the Obsidian container for the
+optional plugin. When running the standalone `mcp/` service, pass the same variable
+to its own process/container. See [.env.example](.env.example).
 
 #### MCP authentication (standalone `mcp/` service)
 
@@ -180,19 +185,23 @@ The Host check is not a credential: any non-browser client can send
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_HTTP_HOST` | `127.0.0.1` | Bind address. Anything other than loopback needs `MCP_AUTH_TOKEN`. |
-| `MCP_AUTH_TOKEN` | unset | Bearer token required on the MCP path (`/health` stays open). At least 32 characters. |
+| `MCP_HTTP_HOST` | `127.0.0.1` | Bind address. Anything other than a loopback IP (`127.0.0.0/8`, `::1`) needs `MCP_AUTH_TOKEN`; the name `localhost` counts as non-loopback. |
+| `MCP_AUTH_TOKEN` | unset | Bearer token required on the MCP path. At least 32 characters. Without it, `/health` returns status only. |
 | `MCP_ALLOW_UNAUTHENTICATED` | `false` | Start on a non-loopback bind without a token, serving read-only tools only. |
 
 | Bind | Token | Result |
 |------|-------|--------|
 | loopback | unset | Starts; no credential (local clients only) |
 | any | set | Starts; every MCP request needs `Authorization: Bearer <token>` |
-| non-loopback | unset | Refuses to start |
-| non-loopback | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts read-only; write tools are not registered |
+| non-loopback, or loopback with `MCP_ALLOWED_HOSTS` set | unset | Refuses to start |
+| same | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts read-only; write tools are not registered |
 
-The container image binds `0.0.0.0` so its published port works, so it needs
-`MCP_AUTH_TOKEN` at run time. Generate one with `openssl rand -hex 32`, keep it
+A non-empty `MCP_ALLOWED_HOSTS` means a proxy or remote name is expected to
+reach the server, so it needs a token even on a loopback bind. Read-only mode
+also withholds `run_dataview_query`, since the plugin may run DataviewJS.
+
+The container image binds `0.0.0.0` so that its published port works. It
+therefore needs `MCP_AUTH_TOKEN` at run time. Generate one with `openssl rand -hex 32`, keep it
 in an untracked `.env` or a secret store, and give the same value to your MCP
 client as an `Authorization: Bearer` header. Publish the port on `127.0.0.1` or
 your tailnet IP, not all interfaces:
@@ -201,10 +210,6 @@ your tailnet IP, not all interfaces:
 ports:
   - "127.0.0.1:3000:3000"   # or "100.x.y.z:3000:3000" for a tailnet IP
 ```
-
-The compose example passes this variable to the Obsidian container for the optional
-plugin. When running the standalone `mcp/` service, pass the same variable to its
-own process/container. See [.env.example](.env.example).
 
 #### Backup
 

@@ -1,30 +1,35 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 import { logger } from "./logger.js";
 
 /** Shortest accepted MCP_AUTH_TOKEN; `openssl rand -hex 32` gives 64. */
 export const MIN_AUTH_TOKEN_LENGTH = 32;
 
+/** At most one rejection log line per window, so a scanner cannot flood logs. */
+const REJECTION_LOG_WINDOW_MS = 60_000;
+
 export interface AccessPolicyInput {
 	httpHost: string;
 	authToken?: string | undefined;
 	allowUnauthenticated: boolean;
+	/** MCP_ALLOWED_HOSTS is set: a proxy or remote name is expected to reach the bind. */
+	hasAllowedHosts: boolean;
 }
 
 export interface AccessPolicy {
-	/** When set, every request on the MCP path must carry this bearer token. */
-	authToken: string | undefined;
 	/** When true, only tools marked `readOnly` are registered. */
 	readOnly: boolean;
 	/** Startup warning to log, if the policy is weaker than recommended. */
 	warning: string | undefined;
 }
 
-/** True only for binds that no other host can reach. */
+/**
+ * True only for loopback IP literals. Names such as `localhost` are refused
+ * because `listen()` binds whatever the resolver returns for them.
+ */
 export function isLoopbackHost(host: string): boolean {
-	const bare = host.replace(/^\[(.*)\]$/, "$1").toLowerCase();
-	if (bare === "localhost") return true;
+	const bare = host.replace(/^\[(.*)\]$/, "$1");
 	if (isIP(bare) === 4) return bare.startsWith("127.");
 	if (isIP(bare) === 6) return bare === "::1";
 	return false;
@@ -36,25 +41,25 @@ export function isLoopbackHost(host: string): boolean {
  * start, and the explicit opt-out drops to read-only tools.
  */
 export function resolveAccessPolicy(input: AccessPolicyInput): AccessPolicy {
-	if (input.authToken) {
-		return { authToken: input.authToken, readOnly: false, warning: undefined };
+	if (input.authToken) return { readOnly: false, warning: undefined };
+	if (isLoopbackHost(input.httpHost) && !input.hasAllowedHosts) {
+		return { readOnly: false, warning: undefined };
 	}
-	if (isLoopbackHost(input.httpHost)) {
-		return { authToken: undefined, readOnly: false, warning: undefined };
-	}
+	const reach = input.hasAllowedHosts
+		? "MCP_ALLOWED_HOSTS admits non-loopback clients"
+		: `MCP_HTTP_HOST=${input.httpHost} is not a loopback IP`;
 	if (!input.allowUnauthenticated) {
 		throw new Error(
 			[
-				`MCP_HTTP_HOST=${input.httpHost} is reachable beyond loopback, but MCP_AUTH_TOKEN is not set.`,
+				`${reach}, but MCP_AUTH_TOKEN is not set.`,
 				`Set MCP_AUTH_TOKEN (at least ${MIN_AUTH_TOKEN_LENGTH} characters, e.g. \`openssl rand -hex 32\`),`,
 				"bind MCP_HTTP_HOST=127.0.0.1, or set MCP_ALLOW_UNAUTHENTICATED=true to serve read-only tools without a token.",
 			].join(" "),
 		);
 	}
 	return {
-		authToken: undefined,
 		readOnly: true,
-		warning: `MCP_ALLOW_UNAUTHENTICATED=true: serving read-only tools without authentication on ${input.httpHost}. Write tools are disabled until MCP_AUTH_TOKEN is set.`,
+		warning: `MCP_ALLOW_UNAUTHENTICATED=true (${reach}): serving read-only tools without authentication. Write tools are disabled until MCP_AUTH_TOKEN is set.`,
 	};
 }
 
@@ -65,17 +70,32 @@ export function tokensMatch(presented: string, expected: string): boolean {
 	return timingSafeEqual(a, b);
 }
 
+/** True when the request carries `Authorization: Bearer <token>`. */
+export function hasValidBearer(req: Request, token: string): boolean {
+	const match = /^Bearer[ ]+(\S+)[ ]*$/i.exec(req.headers.authorization ?? "");
+	return !!match?.[1] && tokensMatch(match[1], token);
+}
+
 /** Require `Authorization: Bearer <token>` before parsing or dispatch. */
-export function bearerAuthMiddleware(token: string): RequestHandler {
+export function bearerAuthMiddleware(
+	token: string,
+	now: () => number = Date.now,
+): RequestHandler {
+	let windowStart = Number.NEGATIVE_INFINITY;
+	let suppressed = 0;
 	return (req, res, next) => {
-		const match = /^Bearer[ ]+(\S+)[ ]*$/i.exec(
-			req.headers.authorization ?? "",
-		);
-		if (match?.[1] && tokensMatch(match[1], token)) return next();
-		logger.warn("Rejected MCP request without a valid bearer token", {
-			remoteAddress: req.socket.remoteAddress,
-			credentialPresent: !!req.headers.authorization,
-		});
+		if (hasValidBearer(req, token)) return next();
+		if (now() - windowStart >= REJECTION_LOG_WINDOW_MS) {
+			logger.warn("Rejected MCP request without a valid bearer token", {
+				remoteAddress: req.socket.remoteAddress,
+				credentialPresent: !!req.headers.authorization,
+				suppressedSinceLastLog: suppressed,
+			});
+			windowStart = now();
+			suppressed = 0;
+		} else {
+			suppressed++;
+		}
 		res
 			.status(401)
 			.set("WWW-Authenticate", 'Bearer realm="obaass-mcp"')
