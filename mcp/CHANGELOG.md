@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Breaking:** require a credential for MCP access beyond loopback. The default
+  bind is now `127.0.0.1`. Set `MCP_AUTH_TOKEN` (at least 32 characters) to
+  require `Authorization: Bearer <token>` on the MCP path, compared in constant
+  time; `/health` stays open. A non-loopback bind without a token (including
+  the container image's `0.0.0.0`) refuses to start unless
+  `MCP_ALLOW_UNAUTHENTICATED=true`, which serves read-only tools only. Write
+  tools (`create_note`, `append_to_note`, `delete_note`, `delete`,
+  `set_frontmatter`, `rename`, `daily_note`, `backup_restore`) are never
+  reachable off loopback without the token.
+
 - Refresh the security dependency group and align Vitest/coverage-v8 at 5.0.4
   so clean installs no longer fail peer resolution. Development now requires
   Node 22.12+, 24, or 26+ as supported by Vitest 5; coverage floors are unchanged.
