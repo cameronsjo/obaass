@@ -6,6 +6,11 @@ export interface ToolDefinition {
 	description: string;
 	inputSchema: z.ZodObject;
 	outputSchema?: z.ZodObject;
+	/**
+	 * True when the tool never changes vault or external state. Unmarked tools
+	 * count as writes and are withheld in read-only mode.
+	 */
+	readOnly?: true;
 	handler: (params: Record<string, unknown>) => Promise<CallToolResult>;
 }
 

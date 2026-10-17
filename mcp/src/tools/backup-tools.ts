@@ -56,6 +56,7 @@ export class BackupToolProvider implements ToolProvider {
 	private backupStatus(): ToolDefinition {
 		return {
 			name: "backup_status",
+			readOnly: true,
 			outputSchema: backupHealthOutputSchema,
 			description:
 				"Get backup service liveness health: status, optional uptime, and any version-specific fields. Use backup_history for commits. Takes no arguments.",
@@ -70,6 +71,7 @@ export class BackupToolProvider implements ToolProvider {
 	private backupHistory(): ToolDefinition {
 		return {
 			name: "backup_history",
+			readOnly: true,
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
 				commits: z.array(
@@ -116,6 +118,7 @@ export class BackupToolProvider implements ToolProvider {
 	private backupShowFile(): ToolDefinition {
 		return {
 			name: "backup_show_file",
+			readOnly: true,
 			description: "Read a file's content at a specific git commit.",
 			inputSchema: z.object({
 				commit: z.string().describe("Git commit hash (full or short)"),
@@ -139,6 +142,7 @@ export class BackupToolProvider implements ToolProvider {
 	private backupDiff(): ToolDefinition {
 		return {
 			name: "backup_diff",
+			readOnly: true,
 			description:
 				"Show the diff for a file between two commits, or a commit and the current state.",
 			inputSchema: z.object({
@@ -200,6 +204,7 @@ export class BackupToolProvider implements ToolProvider {
 	private backupSnapshots(): ToolDefinition {
 		return {
 			name: "backup_snapshots",
+			readOnly: true,
 			description:
 				"List restic backup snapshots. A direct JSON API is not yet implemented in " +
 				"obsidi-backup; this returns the web UI URL where snapshots can be viewed.",

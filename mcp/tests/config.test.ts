@@ -21,6 +21,8 @@ describe("loadConfig", () => {
 			"PLUGIN_MCP_URL",
 			"DAILY_NOTE_FOLDER",
 			"DAILY_NOTE_TEMPLATE",
+			"MCP_AUTH_TOKEN",
+			"MCP_ALLOW_UNAUTHENTICATED",
 		]) {
 			delete process.env[k];
 		}
@@ -36,7 +38,9 @@ describe("loadConfig", () => {
 		const config = loadConfig();
 		expect(config.vaultPath).toBe(vaultPath);
 		expect(config.httpPort).toBe(3000);
-		expect(config.httpHost).toBe("0.0.0.0");
+		expect(config.httpHost).toBe("127.0.0.1");
+		expect(config.authToken).toBeUndefined();
+		expect(config.readOnly).toBe(false);
 		expect(config.httpPath).toBe("/mcp");
 		expect(config.logLevel).toBe("info");
 		expect(config.backupUrl).toBeUndefined();
@@ -74,5 +78,56 @@ describe("loadConfig", () => {
 		process.env.VAULT_PATH = vaultPath;
 		process.env.LOG_LEVEL = "verbose";
 		expect(() => loadConfig()).toThrow();
+	});
+
+	describe("MCP access policy", () => {
+		const token = "k".repeat(32);
+
+		beforeEach(() => {
+			process.env.VAULT_PATH = vaultPath;
+		});
+
+		it("refuses to start on a non-loopback bind without a token", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
+		});
+
+		it("starts on a non-loopback bind when a token is set", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			process.env.MCP_AUTH_TOKEN = token;
+			const config = loadConfig();
+			expect(config.authToken).toBe(token);
+			expect(config.readOnly).toBe(false);
+		});
+
+		it("starts read-only on a non-loopback bind with the explicit opt-out", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			process.env.MCP_ALLOW_UNAUTHENTICATED = "true";
+			const config = loadConfig();
+			expect(config.authToken).toBeUndefined();
+			expect(config.readOnly).toBe(true);
+			expect(config.accessWarning).toMatch(/read-only/);
+		});
+
+		it("treats an empty MCP_AUTH_TOKEN as unset", () => {
+			process.env.MCP_AUTH_TOKEN = "";
+			expect(loadConfig().authToken).toBeUndefined();
+		});
+
+		it.each(["short", " ".repeat(40), `${"k".repeat(31)} x`])(
+			"rejects a weak or malformed MCP_AUTH_TOKEN %j",
+			(value) => {
+				process.env.MCP_AUTH_TOKEN = value;
+				expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
+			},
+		);
+
+		it.each(["yes", "1", "TRUE "])(
+			"rejects an ambiguous MCP_ALLOW_UNAUTHENTICATED value %j",
+			(value) => {
+				process.env.MCP_ALLOW_UNAUTHENTICATED = value;
+				expect(() => loadConfig()).toThrow(/MCP_ALLOW_UNAUTHENTICATED/);
+			},
+		);
 	});
 });

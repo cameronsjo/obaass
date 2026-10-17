@@ -34,6 +34,8 @@ export class PluginToolProvider implements ToolProvider {
 	): ToolDefinition {
 		return {
 			name,
+			// Every proxied plugin tool is a query (search, backlinks, graph, Dataview).
+			readOnly: true,
 			description: `${description} (requires obsidi-mcp plugin)`,
 			inputSchema,
 			handler: async (params) => {
