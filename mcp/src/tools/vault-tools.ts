@@ -61,6 +61,7 @@ export class VaultToolProvider implements ToolProvider {
 	private readNote(): ToolDefinition {
 		return {
 			name: "read_note",
+			readOnly: true,
 			description:
 				"Read the full content of a note by its vault-relative path.",
 			inputSchema: z.object({
@@ -193,6 +194,7 @@ export class VaultToolProvider implements ToolProvider {
 	private searchContent(): ToolDefinition {
 		return {
 			name: "search_content",
+			readOnly: true,
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
 				results: z.array(
@@ -245,6 +247,7 @@ export class VaultToolProvider implements ToolProvider {
 	private vaultStructure(): ToolDefinition {
 		return {
 			name: "vault_structure",
+			readOnly: true,
 			outputSchema: z.object({ entries: z.array(directoryEntrySchema) }),
 			description: "Get the vault's directory tree structure.",
 			inputSchema: z.object({
@@ -264,6 +267,7 @@ export class VaultToolProvider implements ToolProvider {
 	private fileMetadata(): ToolDefinition {
 		return {
 			name: "file_metadata",
+			readOnly: true,
 			outputSchema: z.object({
 				path: z.string(),
 				// The parser preserves any valid YAML root, including scalars/sequences.
@@ -296,6 +300,7 @@ export class VaultToolProvider implements ToolProvider {
 	private vaultTags(): ToolDefinition {
 		return {
 			name: "vault_tags",
+			readOnly: true,
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
 				tags: z.record(z.string(), z.number().int().nonnegative()),
@@ -318,6 +323,7 @@ export class VaultToolProvider implements ToolProvider {
 	private searchByTag(): ToolDefinition {
 		return {
 			name: "search_by_tag",
+			readOnly: true,
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
 				files: z.array(z.string()),
@@ -338,6 +344,7 @@ export class VaultToolProvider implements ToolProvider {
 	private searchByProperty(): ToolDefinition {
 		return {
 			name: "search_by_property",
+			readOnly: true,
 			outputSchema: z.object({
 				count: z.number().int().nonnegative(),
 				results: z.array(z.object({ path: z.string(), value: z.unknown() })),
@@ -367,6 +374,7 @@ export class VaultToolProvider implements ToolProvider {
 	private recentFiles(): ToolDefinition {
 		return {
 			name: "recent_files",
+			readOnly: true,
 			outputSchema: z.object({
 				files: z.array(
 					z.object({
@@ -504,6 +512,7 @@ export class VaultToolProvider implements ToolProvider {
 	private getInstructions(): ToolDefinition {
 		return {
 			name: "get_instructions",
+			readOnly: true,
 			description:
 				"Read vault-specific instructions from CLAUDE.md and AGENTS.md at the vault root. Takes no arguments.",
 			inputSchema: z.object({}),
