@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed: the main-branch image build hung on arm64 under QEMU (`npm ci` hit an
+  illegal-instruction crash and ran to the 6-hour limit, so nothing published).
+  Each platform now builds on a native runner (`ubuntu-24.04-arm` for arm64),
+  the manifest is merged afterwards, pull requests build both platforms, and
+  every job has a 20-minute timeout.
+
 - **Breaking:** require a credential for MCP access beyond loopback. The default
   bind is now `127.0.0.1`. Set `MCP_AUTH_TOKEN` (at least 32 characters) to
   require `Authorization: Bearer <token>` on the MCP path, compared in constant
