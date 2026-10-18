@@ -17,6 +17,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/obaass-mcp
 
+concurrency:
+  group: mcp-docker-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Each platform builds on a native runner. QEMU emulation of arm64 hung
   # `npm ci` with an illegal-instruction crash.
@@ -61,6 +65,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push by digest
         id: build
@@ -144,8 +155,10 @@ jobs:
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
             $(printf "${IMAGE}@sha256:%s " *)
-          first_tag=$(jq -r '.tags[0]' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
-          digest=$(docker buildx imagetools inspect "${first_tag}" --format '{{json .Manifest}}' | jq -r '.digest')
+          # Read back through the immutable per-commit tag (7-char short sha, the
+          # metadata-action default), never a moving tag such as main or latest.
+          sha_ref="${IMAGE}:${GITHUB_SHA::7}"
+          digest=$(docker buildx imagetools inspect "${sha_ref}" --format '{{json .Manifest}}' | jq -r '.digest')
           case "${digest}" in
             sha256:*) ;;
             *) echo "unexpected manifest digest: ${digest}" >&2; exit 1 ;;
