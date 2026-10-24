@@ -151,14 +151,20 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
+          # The metadata file lives outside the digests directory so the
+          # `*` glob below sees only the per-platform digest files.
+          metadata="${RUNNER_TEMP}/manifest-metadata.json"
           # shellcheck disable=SC2046
           docker buildx imagetools create \
+            --metadata-file "${metadata}" \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${DOCKER_METADATA_OUTPUT_JSON}") \
             $(printf "${IMAGE}@sha256:%s " *)
-          # Read back through the immutable per-commit tag (7-char short sha, the
-          # metadata-action default), never a moving tag such as main or latest.
-          sha_ref="${IMAGE}:${GITHUB_SHA::7}"
-          digest=$(docker buildx imagetools inspect "${sha_ref}" --format '{{json .Manifest}}' | jq -r '.digest')
+          # Sign the digest of the manifest list this run pushed, taken from
+          # the create step's own result. Never read it back through a tag:
+          # a main push and a v* tag push for the same commit run in separate
+          # concurrency groups and write the same short-sha tag, so a readback
+          # can return the other run's manifest. Needs buildx >= v0.32.0.
+          digest=$(jq -r '."containerimage.descriptor".digest // empty' "${metadata}")
           case "${digest}" in
             sha256:*) ;;
             *) echo "unexpected manifest digest: ${digest}" >&2; exit 1 ;;
