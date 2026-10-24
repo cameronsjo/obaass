@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed: the image workflow signed and attested a manifest digest read back
+  through the short-sha tag, which a second run for the same commit (a `main`
+  push and a `v*` tag push) could overwrite. It now signs and attests the
+  digest from its own `imagetools create --metadata-file` result.
+
 - Fixed: the main-branch image build hung on arm64 under QEMU (`npm ci` hit an
   illegal-instruction crash and ran to the 6-hour limit, so nothing published).
   Each platform now builds on a native runner (`ubuntu-24.04-arm` for arm64),
