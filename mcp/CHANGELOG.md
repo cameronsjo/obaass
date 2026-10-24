@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Changed: the image workflow pins every third-party action to a full commit
+  SHA, with the release version in a trailing comment, so a re-pointed upstream
+  tag cannot change what runs in the job that pushes, signs, and attests the
+  image. Dependabot (`.github/dependabot.yml`) opens weekly PRs to update the
+  pins.
+
 - Fixed: the image workflow signed and attested a manifest digest read back
   through the short-sha tag, which a second run for the same commit (a `main`
   push and a `v*` tag push) could overwrite. It now signs and attests the
