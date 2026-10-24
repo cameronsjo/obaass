@@ -7,6 +7,8 @@
   tag cannot change what runs in the job that pushes, signs, and attests the
   image. Dependabot (`.github/dependabot.yml`) opens weekly PRs to update the
   pins.
+  Minor and patch updates arrive as one grouped PR; major updates arrive
+  individually.
 
 - Fixed: the image workflow signed and attested a manifest digest read back
   through the short-sha tag, which a second run for the same commit (a `main`
