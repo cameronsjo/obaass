@@ -129,6 +129,11 @@ describe("containment: lexical escapes", () => {
 		await expect(vault.writeFile("x\0.md", "x")).rejects.toThrow();
 	});
 
+	it("treats a file used as a directory as missing, not as an escape", async () => {
+		await expect(vault.readFile("real.md/x.md")).rejects.toThrow(/ENOTDIR/);
+		expect(await vault.exists("real.md/x.md")).toBe(false);
+	});
+
 	it("treats a name that merely starts with dots as inside the vault", async () => {
 		await vault.writeFile("..notes.md", "ok");
 		expect(await vault.readFile("..notes.md")).toBe("ok");
@@ -164,6 +169,21 @@ describe("containment: symlinks", () => {
 	it.each(LINK_ESCAPES)("exists reports %s as absent", async (p) => {
 		expect(await vault.exists(p)).toBe(false);
 	});
+
+	it.each(LINK_ESCAPES)(
+		"appendFile and updateIfUnchanged refuse %s and leave outside untouched",
+		async (p) => {
+			const before = await listTree(outside);
+			await expect(vault.appendFile(p, "PWNED")).rejects.toThrow(REFUSED);
+			await expect(
+				vault.updateIfUnchanged(p, (c) => `${c}PWNED`),
+			).rejects.toThrow(REFUSED);
+			expect(await listTree(outside)).toEqual(before);
+			expect(await readFile(join(outside, "secret.txt"), "utf-8")).toBe(
+				"TOP SECRET",
+			);
+		},
+	);
 
 	it.each(LINK_ESCAPES)(
 		"deleteFile refuses %s and leaves outside untouched",

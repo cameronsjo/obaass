@@ -108,8 +108,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    outputs:
-      digest: ${{ steps.manifest.outputs.digest }}
     permissions:
       contents: read
       packages: write

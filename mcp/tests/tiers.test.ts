@@ -260,6 +260,9 @@ beforeEach(async () => {
 	git("commit", "-q", "-am", "two");
 	head = git("rev-parse", "HEAD");
 	await mkdir(join(vaultPath, "notes"));
+	await mkdir(join(vaultPath, "Inbox"));
+	await symlink(join(vaultPath, "Inbox"), join(vaultPath, "inboxlink"));
+	await symlink(join(vaultPath, ".private"), join(vaultPath, "privlink"));
 	await symlink(
 		join(vaultPath, ".private", "n.md"),
 		join(vaultPath, "notes", "link.md"),
@@ -428,11 +431,30 @@ describe("limited path policy", () => {
 		await refused("create_note", { path: "CLAUDE.md", content: "x" });
 		await refused("create_note", { path: "sub/dir/claude.MD", content: "x" });
 		await refused("create_note", { path: "deep/GEMINI.md", content: "x" });
+		await refused("create_note", { path: "CLAUDE.local.md", content: "x" });
+		await refused("create_note", {
+			path: "a/AGENTS.override.md",
+			content: "x",
+		});
+		await refused("create_note", { path: "AGENTS.md", content: "x" });
 		await refused("append_to_note", { path: "AGENTS.md", content: "x" });
 		await refused("append_to_note", {
 			path: "Templates/daily.md",
 			content: "<%* x %>",
 		});
+	});
+
+	it("follows an in-vault directory link to a normal folder but refuses one into a dot folder", async () => {
+		const ok = await callTool(
+			"create_note",
+			{ path: "inboxlink/new.md", content: "via link" },
+			LIMITED_TOKEN,
+		);
+		expect(ok.body.result?.isError, text(ok)).toBeFalsy();
+		expect(await readFile(join(vaultPath, "Inbox", "new.md"), "utf8")).toBe(
+			"via link",
+		);
+		await refused("create_note", { path: "privlink/new.md", content: "x" });
 	});
 
 	it("refuses overwrite and regex search", async () => {
@@ -600,6 +622,35 @@ describe("rate limit for restricted access", () => {
 		expect(statuses.slice(0, -1).every((s) => s === 200)).toBe(true);
 		expect(statuses.at(-1)).toBe(429);
 		expect((await rpc("tools/list", {}, FULL_TOKEN)).status).toBe(200);
+	});
+
+	it("counts every message in a batch toward the cap", async () => {
+		await start({ tokens: { limited: LIMITED_TOKEN } });
+		vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const read = vi.spyOn(VaultService.prototype, "readFile");
+		const batch = (n: number, offset: number) =>
+			Array.from({ length: n }, (_, i) => ({
+				jsonrpc: "2.0",
+				id: offset + i,
+				method: "tools/call",
+				params: { name: "read_note", arguments: { path: "note.md" } },
+			}));
+		const post = (body: unknown) =>
+			fetch(`http://127.0.0.1:${port}/mcp`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					accept: "application/json, text/event-stream",
+					"MCP-Protocol-Version": "2025-11-25",
+					authorization: `Bearer ${LIMITED_TOKEN}`,
+				},
+				body: JSON.stringify(body),
+			});
+		expect((await post(batch(100, 0))).status).toBe(200);
+		const callsAfterFirst = read.mock.calls.length;
+		expect(callsAfterFirst).toBeGreaterThanOrEqual(100);
+		expect((await post(batch(30, 100))).status).toBe(429);
+		expect(read.mock.calls.length).toBe(callsAfterFirst);
 	});
 });
 

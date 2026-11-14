@@ -82,8 +82,12 @@ export interface PathPolicy {
 	protectedPaths: readonly string[];
 }
 
-/** Files agents load as instructions; a restricted tier may not write them anywhere. */
-const INSTRUCTION_FILES = new Set(["claude.md", "agents.md", "gemini.md"]);
+/**
+ * Files agents load as instructions, including variants such as
+ * `CLAUDE.local.md` and `AGENTS.override.md`; a restricted tier may not write
+ * them anywhere.
+ */
+const INSTRUCTION_FILE = /^(claude|agents|gemini)(\.[^/]*)?\.md$/i;
 
 type Intent = "read" | "write";
 
@@ -142,7 +146,7 @@ export class VaultService {
 		}
 		if (intent === "read") return;
 		if (extname(rel).toLowerCase() !== ".md") throw policyRefusal("non_md");
-		if (INSTRUCTION_FILES.has(basename(rel).toLowerCase())) {
+		if (INSTRUCTION_FILE.test(basename(rel))) {
 			throw policyRefusal("instruction_file");
 		}
 		const lowered = rel.toLowerCase();
@@ -215,9 +219,12 @@ export class VaultService {
 			try {
 				isLink = (await lstat(next)).isSymbolicLink();
 			} catch (err) {
-				if ((err as NodeJS.ErrnoException).code === "ENOENT") break;
+				// ENOENT: the rest does not exist yet. ENOTDIR: a file is used as a
+				// directory, so nothing below it can exist. Either way no link lies ahead.
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code === "ENOENT" || code === "ENOTDIR") break;
 				throw new AccessRefusal(
-					`Path traversal rejected (unresolvable component): ${vaultRelPath}`,
+					"Path traversal rejected (unresolvable component).",
 					"outside_root",
 				);
 			}
@@ -231,7 +238,7 @@ export class VaultService {
 				target = await realpath(next);
 			} catch {
 				throw new AccessRefusal(
-					`Path traversal rejected (dangling symlink escape): ${vaultRelPath}`,
+					"Path traversal rejected (dangling symlink escape).",
 					"symlink",
 				);
 			}
@@ -300,7 +307,8 @@ export class VaultService {
 
 	/**
 	 * Read, transform, and write back a file, refusing when its size or mtime
-	 * changed between the read and the write (a concurrent edit would be lost).
+	 * changed while it was being read and transformed (a concurrent edit would
+	 * be lost). A write that lands after the second stat is not detected.
 	 */
 	async updateIfUnchanged(
 		path: string,

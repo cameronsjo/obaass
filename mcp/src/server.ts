@@ -62,14 +62,15 @@ class RateLimiter {
 
 	constructor(private readonly now: () => number = Date.now) {}
 
-	allow(access: Access): boolean {
+	/** Counts `messages` JSON-RPC messages, so one batch POST cannot carry 100 calls as one. */
+	allow(access: Access, messages: number): boolean {
 		const now = this.now();
-		const window = this.windows.get(access);
+		let window = this.windows.get(access);
 		if (!window || now - window.start >= RATE_WINDOW_MS) {
-			this.windows.set(access, { start: now, count: 1 });
-			return true;
+			window = { start: now, count: 0 };
+			this.windows.set(access, window);
 		}
-		window.count++;
+		window.count += messages;
 		return window.count <= RESTRICTED_REQUESTS_PER_MINUTE;
 	}
 }
@@ -155,13 +156,14 @@ export function createMcpApp(
 		const auth = (req as Request & { auth?: AuthInfo }).auth;
 		const access = resolveAccess(accessOptions, auth);
 		const requestId = String(req.headers[REQUEST_ID_HEADER]);
-		if (access && access !== "full" && !limiter.allow(access)) {
-			refusals.record(access, "", "rate_limited", requestId);
+		const messages = Array.isArray(req.body) ? Math.max(req.body.length, 1) : 1;
+		if (access && access !== "full" && !limiter.allow(access, messages)) {
+			refusals.record(access, undefined, "rate_limited", requestId);
 			res.status(429).json({
 				jsonrpc: "2.0",
 				error: {
 					code: JSONRPC_RATE_LIMITED,
-					message: `Rate limit exceeded for this access tier (${RESTRICTED_REQUESTS_PER_MINUTE} requests per minute); retry later.`,
+					message: `Rate limit exceeded for this access tier (${RESTRICTED_REQUESTS_PER_MINUTE} messages per minute, batches counted per message); retry later.`,
 				},
 				id: null,
 			});

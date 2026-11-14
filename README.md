@@ -220,10 +220,10 @@ The server enforces the tier itself, so a rule mistake at a gateway in front of 
 `limited` and `anonymous` also follow a path policy:
 
 - No path segment may start with `.` (`.obsidian/`, `.git/`, `.trash/`, dotfiles), on the requested path or on where a symlink resolves. Dot entries are hidden from listings and searches.
-- `limited` writes go only to `.md` files, only by creating a new note or appending, and never to `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md` at any depth, or to the configured `DAILY_NOTE_TEMPLATE`.
-- Each is capped at 120 requests per minute (HTTP 429 past that).
+- `limited` writes go only to `.md` files, only by creating a new note or appending. They never go to an agent instruction file at any depth (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and variants such as `CLAUDE.local.md` or `AGENTS.override.md`), or to the configured `DAILY_NOTE_TEMPLATE`.
+- Each is capped at 120 JSON-RPC messages per minute; every message in a batch counts. Past that the server answers HTTP 429.
 
-`limited` can create and append anywhere else in the vault. A note it writes can carry code that Obsidian runs on a device. That happens when Dataview's "Enable JavaScript Queries" is on, when Templater's "Trigger Templater on new file creation" is on, or when someone applies a template it appended to. Turn those settings off, or accept that risk for the client holding the `limited` token.
+`limited` can create and append anywhere else in the vault. A note it writes can carry code that Obsidian runs on a device. That happens when Dataview's "Enable JavaScript Queries" is on, when Templater's "Trigger Templater on new file creation" is on, or when someone applies a template it appended to. Turn those settings off, or accept that risk for the client holding the `limited` token. The same applies to instructions. A vault `CLAUDE.md` that imports another note with `@path` makes that note an instruction file. `limited` can append to the imported note, so keep imports in `full`-only notes or out of the vault.
 
 Every request gets a server-assigned `requestId` on its audit lines. Refusals log at `warn` once per tool and refusal kind per minute, with a count, and never include the refused path. At startup the server logs a short fingerprint of each configured token, so a rotation can be confirmed without printing the token. Rotation and rollback: [docs/runbooks/rotate-mcp-tokens.md](docs/runbooks/rotate-mcp-tokens.md).
 

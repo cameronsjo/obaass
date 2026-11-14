@@ -356,6 +356,12 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 ## Deviations
 
+- **2026-11-14 — Polish: refusal kinds and messages differ from the Logging section.** The kind set dropped `write_scope` (D1 removed the folder allowlist) and gained `protected_path`, `write_operation`, and `rate_limited`. Refusal messages name the rule but not the tier, because `VaultService` does not know the caller's tier; the audit line carries `tier`. The two new containment messages no longer include the path. The older traversal messages still echo the caller's own path back to the caller, and none is logged.
+- **2026-11-14 — Polish: `appendFile` opens with `O_WRONLY|O_APPEND` and no `O_CREAT`**, so an append to a missing note fails as before instead of creating it. This is an improvement over the plan's `flag: "a"`.
+- **2026-11-14 — Polish: the rate cap counts JSON-RPC messages, not HTTP requests.** Review found that one legacy batch POST carried up to 100 calls past a per-request cap.
+- **2026-11-14 — Polish: instruction files match `CLAUDE*.md`, `AGENTS*.md`, and `GEMINI*.md` by basename prefix** (for example `CLAUDE.local.md` and `AGENTS.override.md`), not three exact names. A `CLAUDE.md` `@path` import that makes another note an instruction is documented as part of the D1 residual.
+- **2026-11-14 — Task 5: the merge job's `digest` output was dropped.** It had no consumer; the job summary and `scripts/release-handoff.sh` carry the digest.
+
 - **2026-11-14 — Task 2: `createMcpApp` throws on unknown option keys.** Migrating the tests showed that a caller still passing the retired `{ authToken }` option got an app with no bearer middleware and no error (vitest does not type-check). This is a chosen improvement: an unrecognized option now refuses to build the app.
 - **2026-11-14 — Task 2: `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) names the gateway's correlation header.** The plan said a gateway id MAY be recorded but named no header. gateway-lane has been asked which header it will send.
 - **2026-11-14 — Task 3: the `@hono/node-server` advisory stays open (moderate, unreachable here).** `npm audit fix` without `--force` only moved it 1.19.17 → 1.19.19 inside the 1.x line. The fix is 2.x, which needs `@modelcontextprotocol/node` 2.1.2, which in turn pulls `@modelcontextprotocol/server` 2.4.0, a minor bump of the SDK under the new control. The adapter imports only `getRequestListener` (the advisory covers `serveStatic` and proxy path ACLs), and Express does the routing. So the SDK bump is left to its own change.

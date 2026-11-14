@@ -171,9 +171,9 @@ export class VaultToolProvider implements ToolProvider {
 					await vault.writeFile(path, content);
 					return textResult(`Created note at '${path}'.`);
 				}
-				if (await vault.exists(path)) return exists();
 				try {
-					// Exclusive: a file that appears after the check above is not replaced.
+					// Exclusive create: the path policy runs first, then O_EXCL refuses
+					// an existing file (or one that appears at the last moment).
 					await vault.createFile(path, content);
 				} catch (err) {
 					if (err instanceof FileExistsError) return exists();

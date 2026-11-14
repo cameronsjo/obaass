@@ -22,10 +22,12 @@ done
 FULL=$(openssl rand -hex 32)
 LIMITED=$(openssl rand -hex 32)
 VAULT=$(mktemp -d)
+BODY=$(mktemp)
 NAME="obaass-tier-smoke-$$"
 cleanup() {
+	# The container may not exist if the build or run failed; nothing to remove then.
 	docker rm -f "$NAME" > /dev/null 2>&1 || true
-	rm -rf "$VAULT"
+	rm -rf "$VAULT" "$BODY"
 	return 0
 }
 trap cleanup EXIT
@@ -42,10 +44,16 @@ docker run -d --name "$NAME" -p "127.0.0.1:$PORT:3000" -e MCP_ALLOWED_HOSTS="127
 	-v "$VAULT:/vault" "$IMAGE" > /dev/null
 URL="http://127.0.0.1:$PORT/mcp"
 
+healthy=no
 for _ in $(seq 1 30); do
-	curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1 && break
+	if curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then healthy=yes; break; fi
 	sleep 1
 done
+if [[ "$healthy" != yes ]]; then
+	echo "FAIL: /health never answered; container log follows" >&2
+	docker logs "$NAME" >&2 || true
+	exit 1
+fi
 
 # rpc <token-or-empty> <method> <params-json> -> prints "<http-status> <body>"
 rpc() {
@@ -59,13 +67,12 @@ rpc() {
 		"io.modelcontextprotocol/protocolVersion":"2026-07-28",
 		"io.modelcontextprotocol/clientCapabilities":{},
 		"io.modelcontextprotocol/clientInfo":{name:"tier-smoke",version:"1"}}})}')
-	curl -sS -o /tmp/tier-smoke-body.$$ -w '%{http_code}' ${auth[@]+"${auth[@]}"} \
+	curl -sS -o "$BODY" -w '%{http_code}' ${auth[@]+"${auth[@]}"} \
 		-H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
 		-H 'MCP-Protocol-Version: 2026-07-28' -H "Mcp-Method: $2" \
 		-d "$body" "$URL"
 	printf ' '
-	sed -n 's/^data: //p; /^{/p' /tmp/tier-smoke-body.$$ | tail -1
-	rm -f /tmp/tier-smoke-body.$$
+	sed -n 's/^data: //p; /^{/p' "$BODY" | tail -1
 }
 
 failures=0

@@ -139,7 +139,8 @@ const REFUSAL_WINDOW_MS = 60_000;
 interface RefusalWindow {
 	start: number;
 	suppressed: number;
-	requestId: string;
+	/** Request id of the refusal that opened the window, carried on its count line. */
+	firstRequestId: string;
 }
 
 /**
@@ -156,18 +157,19 @@ export class RefusalLog {
 		private readonly now: () => number = Date.now,
 	) {}
 
+	/** `toolName` is undefined for refusals that are not about one tool (rate limits). */
 	record(
 		tier: Access | "none",
-		toolName: string,
+		toolName: string | undefined,
 		refusalKind: RefusalKind,
 		requestId: string,
 	): void {
-		const known = this.registeredTools.has(toolName);
-		const tool = known ? toolName : "unknown";
+		const known = toolName === undefined || this.registeredTools.has(toolName);
+		const tool = toolName === undefined ? "all" : known ? toolName : "unknown";
 		const fields = {
 			tier,
 			tool,
-			...(!known && { toolNameLength: toolName.length }),
+			...(!known && { toolNameLength: toolName?.length ?? 0 }),
 			refusalKind,
 		};
 		const key = `${tier}\u0000${tool}\u0000${refusalKind}`;
@@ -178,7 +180,12 @@ export class RefusalLog {
 			return;
 		}
 		if (window) this.emitCount(window);
-		this.windows.set(key, { start: now, suppressed: 0, requestId, fields });
+		this.windows.set(key, {
+			start: now,
+			suppressed: 0,
+			firstRequestId: requestId,
+			fields,
+		});
 		logger.warn("Refused MCP request outside its access tier", {
 			...fields,
 			requestId,
@@ -200,6 +207,7 @@ export class RefusalLog {
 		logger.warn("Repeated refusals outside access tier", {
 			...window.fields,
 			count: window.suppressed,
+			firstRequestId: window.firstRequestId,
 			windowMs: REFUSAL_WINDOW_MS,
 		});
 	}

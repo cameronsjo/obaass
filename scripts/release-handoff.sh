@@ -62,7 +62,7 @@ main() {
 	cosign verify "$IMAGE@$digest" \
 		--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 		--certificate-identity "https://github.com/$REPO/.github/workflows/$WORKFLOW@refs/$ref_kind/$ref" \
-		> /dev/null 2>&1 || fail "cosign signature for $IMAGE@$digest did not verify"
+		> /dev/null || fail "cosign signature for $IMAGE@$digest did not verify (cosign's reason above)"
 
 	echo "ref:     $ref"
 	echo "run:     $run_url"

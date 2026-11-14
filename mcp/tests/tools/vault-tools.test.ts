@@ -496,14 +496,13 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		await cleanupVault(vaultPath);
 	});
 
-	it("create_note without overwrite never replaces a file that appears after its existence check", async () => {
-		// Simulates a concurrent writer: the note does not exist when create_note
-		// checks, then appears before the write. The create must not replace it.
+	it("create_note without overwrite never replaces a file that appears just before the write", async () => {
+		// Simulates a concurrent writer: the note appears immediately before the
+		// exclusive create opens it. The create must not replace it.
 		class RacingVault extends VaultService {
-			override async exists(path: string): Promise<boolean> {
-				const result = await super.exists(path);
+			override async createFile(path: string, content: string): Promise<void> {
 				await writeVaultFile(vaultPath, path, "written by another client");
-				return result;
+				return super.createFile(path, content);
 			}
 		}
 		const provider = new VaultToolProvider(
