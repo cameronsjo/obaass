@@ -449,6 +449,11 @@ describe("limited path policy", () => {
 		});
 		await refused("create_note", { path: "AGENTS.md", content: "x" });
 		await refused("create_note", { path: "notes/QWEN.md", content: "x" });
+		await refused("create_note", { path: "CLAUDE.md/x.md", content: "x" });
+		await refused("create_note", {
+			path: "Daily Notes/2026-09-09.md/x.md",
+			content: "x",
+		});
 		await refused("append_to_note", { path: "AGENTS.md", content: "x" });
 		await refused("append_to_note", {
 			path: "Templates/daily.md",
@@ -920,7 +925,11 @@ describe("refusal audit trail over HTTP", () => {
 			tool: "read_note",
 			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
 		});
-		expect(byKind.rate_limited).toMatchObject({ tier: "limited", tool: "all" });
+		expect(byKind.rate_limited).toMatchObject({
+			tier: "limited",
+			tool: "all",
+			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+		});
 		expect(lines).toHaveLength(3);
 	});
 });

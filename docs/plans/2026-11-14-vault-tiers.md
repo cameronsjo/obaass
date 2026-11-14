@@ -348,13 +348,19 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - `mcp/src/tools/{tiers,index,types,vault-tools,backup-tools,plugin-tools}.ts`
   - `mcp/src/vault/vault-service.ts`
   - `toNodeHandler` in `mcp/node_modules/@modelcontextprotocol/node/dist/index.mjs`
-- [ ] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI image build green and the local suite green at head (CI runs no test job; follow-up issue); flip ready; report ready on CAM-720 and `hc send t5k`
+- [ ] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI image build green and the local suite green at head (CI runs no test job; cameronsjo/obaass#36); flip ready; report ready on CAM-720 and `hc send t5k`
 - [ ] File on `cameronsjo/obsidi-backup`: the Untitled renamer's `sanitize_title` keeps a leading `.`, so content a `limited` client writes can steer a rename to a dot-prefixed name
 - [ ] After Cameron's go: bump `0.1.0` → `0.2.0` in `package.json`, `server.ts`, `health.ts`, and the changelog heading; merge; tag `v0.2.0`; run `scripts/release-handoff.sh v0.2.0`; post its output on CAM-720
 
 ---
 
 ## Deviations
+
+- **2026-11-14 — PR review round 2 and security round 2 nits.**
+  - `daily_note` tries the template's `.md` file first and skips a folder of the same name.
+  - Restricted tiers may not create a folder whose name ends in `.md` (`CLAUDE.md/x.md`, `<date>.md/x.md`), which would block that note for every tier.
+  - The refusal-trail test checks the rate-limit line's `requestId`.
+  - The plan cites cameronsjo/obaass#36.
 
 - **2026-11-14 — Contract change, decided by Cameron in session: `full` loses write access to hidden paths.** The plan kept `full` able to write `.git/` and `.obsidian/` so existing consumers would keep working. That left the full token able to plant a command in `.git/config` or code in a plugin file. Cameron chose to remediate. Every tier now refuses writes, deletes, and renames on a path with a dot segment, on the requested and the resolved path. Reads and `backup_restore` are unchanged. `rename`'s link rewrite skips hidden notes. This narrows `full`'s behavior, which the Global Constraints had kept unchanged; it is the one intended exception. A staged break turned the new test red.
 
@@ -367,7 +373,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - `RefusalKind` derives from `AccessRefusalKind`.
   - `health.ts` is back under the coverage gate.
   - The anonymous call test runs in both eras.
-  - The ready gate is reworded, because CI runs no test job (follow-up issue).
+  - The ready gate is reworded, because CI runs no test job (cameronsjo/obaass#36).
 
 - **2026-11-14 — Attestation pass and its nits.** The fresh Opus security pass at `7671339` found no Critical or Important issue; every prior issue was closed. Its three nits were folded after it, under the orchestrator's favor-action instruction:
   - Write tools report what they wrote (`_meta` `obaass/written`), so `daily_note` gets an audit target and a no-op create is not logged as applied. "Already exists" is now `isError`.

@@ -33,7 +33,8 @@ function writtenResult(text: string, path: string): CallToolResult {
 export function templateSpellings(template: string | undefined): string[] {
 	if (!template) return [];
 	const rel = template.replace(/^\/+/, "");
-	return rel.toLowerCase().endsWith(".md") ? [rel] : [rel, `${rel}.md`];
+	// The `.md` file first: that is what Obsidian resolves the setting to.
+	return rel.toLowerCase().endsWith(".md") ? [rel] : [`${rel}.md`, rel];
 }
 
 /** Longest search term, tag, property, or heading accepted from a caller. */
@@ -618,17 +619,21 @@ export class VaultToolProvider implements ToolProvider {
 				let content: string;
 				// Operator-configured, so read through the unrestricted service; try the
 				// setting as written, then with `.md` (Obsidian omits the extension).
-				let templatePath: string | undefined;
+				let template: string | undefined;
 				for (const candidate of templateSpellings(
 					this.config.dailyNoteTemplate,
 				)) {
-					if (await this.vault.exists(candidate)) {
-						templatePath = candidate;
+					try {
+						template = await this.vault.readFile(candidate);
 						break;
+					} catch (err) {
+						// Missing, or a folder where a file was expected: try the next one.
+						const code = (err as NodeJS.ErrnoException).code;
+						if (code !== "ENOENT" && code !== "EISDIR") throw err;
 					}
 				}
-				if (templatePath) {
-					content = await this.vault.readFile(templatePath);
+				if (template !== undefined) {
+					content = template;
 					content = content.replace(/\{\{date\}\}/g, targetDate);
 					content = content.replace(/\{\{title\}\}/g, targetDate);
 				} else {

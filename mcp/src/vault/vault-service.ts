@@ -174,6 +174,16 @@ export class VaultService {
 		if (hidden) throw policyRefusal("dot_segment");
 		if (intent === "read") return;
 		if (extname(rel).toLowerCase() !== ".md") throw policyRefusal("non_md");
+		// A folder named like a note (`X.md/y.md`) would block the note `X.md`
+		// for every tier; restricted tiers may not create one.
+		if (
+			rel
+				.split(sep)
+				.slice(0, -1)
+				.some((s) => s.toLowerCase().endsWith(".md"))
+		) {
+			throw policyRefusal("non_md");
+		}
 		if (INSTRUCTION_FILE.test(basename(rel))) {
 			throw policyRefusal("instruction_file");
 		}
