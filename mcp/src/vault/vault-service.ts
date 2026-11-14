@@ -1,6 +1,9 @@
+import { constants as fsConstants } from "node:fs";
 import {
 	rename as fsRename,
+	lstat,
 	mkdir,
+	open,
 	readFile,
 	readdir,
 	realpath,
@@ -34,24 +37,18 @@ const IGNORED_DIRS = new Set([
 const MAX_SEARCH_RESULTS = 1000;
 const MAX_RECENT_FILES = 500;
 
-/**
- * Resolve the real (symlink-followed) path of the nearest existing ancestor of `p`.
- * Targets of a write may not exist yet, so we climb until something resolves; a
- * non-existent tail cannot itself be a symlink, so the nearest existing ancestor is
- * the meaningful boundary to check.
- */
-async function realpathNearestExisting(p: string): Promise<string> {
-	let cur = p;
-	for (;;) {
-		try {
-			return await realpath(cur);
-		} catch {
-			const parent = dirname(cur);
-			if (parent === cur) return cur;
-			cur = parent;
-		}
-	}
+/** True when `p` is `root` or lies below it, compared on a `path.sep` boundary. */
+function isWithin(p: string, root: string): boolean {
+	return p === root || p.startsWith(root + sep);
 }
+
+/** Thrown when an exclusive create finds the path already taken. */
+export class FileExistsError extends Error {
+	readonly code = "EEXIST";
+}
+
+/** Thrown when a read-modify-write finds the file changed since it was read. */
+export class ConcurrentModificationError extends Error {}
 
 export interface VaultFile {
 	path: string;
@@ -108,18 +105,48 @@ export class VaultService {
 	}
 
 	/**
-	 * Async guard: the sync prefilter PLUS a realpath boundary check that defeats
-	 * symlinks inside the vault pointing outside it. Compares against a `path.sep`
-	 * boundary so a sibling like `/vault-2` is not treated as inside `/vault`.
+	 * Async guard: the sync prefilter, then a walk over every existing path
+	 * component below the real vault root. Each symlink on the way must resolve
+	 * inside the root; a dangling symlink is refused, because a later write would
+	 * follow it to wherever it points. Only ENOENT ends the walk as "the rest does
+	 * not exist yet"; any other lstat error refuses. Returns the lexical path so
+	 * that delete and rename act on a link itself, not on its target.
 	 */
 	private async resolveSafe(vaultRelPath: string): Promise<string> {
 		const resolved = this.resolve(vaultRelPath);
 		const realRoot = await this.getRealVaultPath();
-		const realProbe = await realpathNearestExisting(resolved);
-		if (realProbe !== realRoot && !realProbe.startsWith(realRoot + sep)) {
-			throw new Error(
-				`Path traversal rejected (symlink escape): ${vaultRelPath}`,
-			);
+		const rel = relative(this.vaultPath, resolved);
+		const parts = rel === "" ? [] : rel.split(sep);
+		let current = realRoot;
+		for (const part of parts) {
+			const next = join(current, part);
+			let isLink: boolean;
+			try {
+				isLink = (await lstat(next)).isSymbolicLink();
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "ENOENT") break;
+				throw new Error(
+					`Path traversal rejected (unresolvable component): ${vaultRelPath}`,
+				);
+			}
+			if (!isLink) {
+				current = next;
+				continue;
+			}
+			let target: string;
+			try {
+				target = await realpath(next);
+			} catch {
+				throw new Error(
+					`Path traversal rejected (dangling symlink escape): ${vaultRelPath}`,
+				);
+			}
+			if (!isWithin(target, realRoot)) {
+				throw new Error(
+					`Path traversal rejected (symlink escape): ${vaultRelPath}`,
+				);
+			}
+			current = target;
 		}
 		return resolved;
 	}
@@ -134,6 +161,61 @@ export class VaultService {
 		const absPath = await this.resolveSafe(path);
 		await mkdir(dirname(absPath), { recursive: true });
 		await writeFile(absPath, content, "utf-8");
+	}
+
+	/**
+	 * Create a new file, creating parent directories as needed. Never replaces:
+	 * the open is exclusive (O_CREAT|O_EXCL), which also refuses a symlink at the
+	 * final component. Throws FileExistsError when the path is taken.
+	 */
+	async createFile(path: string, content: string): Promise<void> {
+		const absPath = await this.resolveSafe(path);
+		await mkdir(dirname(absPath), { recursive: true });
+		try {
+			await writeFile(absPath, content, { encoding: "utf-8", flag: "wx" });
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+				throw new FileExistsError(`File already exists: ${path}`);
+			}
+			throw err;
+		}
+	}
+
+	/**
+	 * Append to the end of an existing file with O_APPEND, so a concurrent writer's
+	 * bytes are kept rather than overwritten by a stale read. Never creates.
+	 */
+	async appendFile(path: string, content: string): Promise<void> {
+		const absPath = await this.resolveSafe(path);
+		const handle = await open(
+			absPath,
+			fsConstants.O_WRONLY | fsConstants.O_APPEND,
+		);
+		try {
+			await handle.writeFile(content, "utf-8");
+		} finally {
+			await handle.close();
+		}
+	}
+
+	/**
+	 * Read, transform, and write back a file, refusing when its size or mtime
+	 * changed between the read and the write (a concurrent edit would be lost).
+	 */
+	async updateIfUnchanged(
+		path: string,
+		transform: (content: string) => string,
+	): Promise<void> {
+		const absPath = await this.resolveSafe(path);
+		const before = await stat(absPath);
+		const updated = transform(await this.readFile(path));
+		const after = await stat(absPath);
+		if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+			throw new ConcurrentModificationError(
+				"The note changed while it was being updated; retry the call.",
+			);
+		}
+		await writeFile(absPath, updated, "utf-8");
 	}
 
 	/** Delete a file. */

@@ -1,8 +1,8 @@
 ---
-status: planned
-next: "Task 0 (commit plan, draft PR, CAM-720 post) → Task 1 containment"
+status: in-flight
+next: "Task 2 tiers → Task 3 deps → Task 4 docs → Task 5 review, ready"
 branch: cam-723-vault-tiers-make-the-vault-mcp-server-enforce-an
-pr: "—"
+pr: cameronsjo/obaass#35
 updated: 2026-11-14
 approved_session_id: 32707994-77f2-44ea-9d37-595c7498e1fa
 date: 2026-11-14
@@ -208,8 +208,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 **Steps:**
 
 - [x] Record D1/D2 answers in this plan
-- [ ] Commit the plan; push `-u`; open the draft PR (`Fixes CAM-723`); push after every task from here on
-- [ ] Post on CAM-720: the final tier names and tool lists (including `anonymous`), the vault-wide write scope, and an FYI that the brief's SDK floor names the v1 package. The v2 packages in use are past both CVEs, and CVE-2026-111771's bearer helper is not used here. gateway-lane's agreement on names and lists gates the ready flip (Task 5), not implementation. Also record the attribution dependency: the gateway logs the signed-in identity with a request id it forwards. Record too that log retention for refusal lines belongs to the deployment side (CAM-722).
+- [x] Commit the plan; push `-u`; open the draft PR (`Fixes CAM-723`); push after every task from here on
+- [x] Post on CAM-720: the final tier names and tool lists (including `anonymous`), the vault-wide write scope, and an FYI that the brief's SDK floor names the v1 package. The v2 packages in use are past both CVEs, and CVE-2026-111771's bearer helper is not used here. gateway-lane's agreement on names and lists gates the ready flip (Task 5), not implementation. Also record the attribution dependency: the gateway logs the signed-in identity with a request id it forwards. Record too that log retention for refusal lines belongs to the deployment side (CAM-722).
 
 ### Task 1 — Containment: tests first, then the guard fixes
 
@@ -228,14 +228,14 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 **Steps:**
 
-- [ ] Extend `containment.test.ts`: `deleteFile`, `exists`, and rename-source through every escaping link; lexical escapes for `exists`; a populated `outside/sub` read, deleted, and renamed through `linkdir/`; `createFile` symlink cases matched to the refusal regex, not a bare throw
-- [ ] RED tests in `vault-tools.test.ts`: `create_note` without `overwrite` onto an existing note leaves it unchanged; `daily_note` with `date: "../x"` is refused; a tail append keeps a byte written by another writer between read and write; a heading insert refuses when the note changed; a heading-looking YAML comment inside frontmatter is not a target
-- [ ] Run — RED on the dangling-symlink, create-onto-existing, and `daily_note` cases
-- [ ] Fix `resolveSafe` (walk below the real root; dangling refused; only `ENOENT` ends the walk); add `createFile` (`wx`) and `appendFile` (`a`); `create_note` without `overwrite` and `daily_note` use `createFile`; tail append uses `appendFile`; heading insert searches after frontmatter and checks mtime and size before writing; `date` schema `^\d{4}-\d{2}-\d{2}$`
-- [ ] Backup git calls run with `GIT_LITERAL_PATHSPECS=1` in the `execFile` env. `backup-git.test.ts` builds a real repo with two files and shows that `backup_restore` with `path: "*"` restores neither
-- [ ] Run — GREEN
-- [ ] Stage three breaks one at a time, each from a `cp` of the clean file: revert the component walk (dangling tests go red), `wx` → `w` (create-never-replaces goes red), remove the `..`/absolute prefilter (lexical tests go red). Restore and re-run green.
-- [ ] Commit: `fix(mcp): refuse writes through dangling symlinks; exclusive create and append`
+- [x] Extend `containment.test.ts`: `deleteFile`, `exists`, and rename-source through every escaping link; lexical escapes for `exists`; a populated `outside/sub` read, deleted, and renamed through `linkdir/`; `createFile` symlink cases matched to the refusal regex, not a bare throw
+- [x] RED tests in `vault-tools.test.ts`: `create_note` without `overwrite` onto an existing note leaves it unchanged; `daily_note` with `date: "../x"` is refused; a tail append keeps a byte written by another writer between read and write; a heading insert refuses when the note changed; a heading-looking YAML comment inside frontmatter is not a target
+- [x] Run — RED on the dangling-symlink, create-onto-existing, and `daily_note` cases
+- [x] Fix `resolveSafe` (walk below the real root; dangling refused; only `ENOENT` ends the walk); add `createFile` (`wx`) and `appendFile` (`a`); `create_note` without `overwrite` and `daily_note` use `createFile`; tail append uses `appendFile`; heading insert searches after frontmatter and checks mtime and size before writing; `date` schema `^\d{4}-\d{2}-\d{2}$`
+- [x] Backup git calls run with `GIT_LITERAL_PATHSPECS=1` in the `execFile` env. `backup-git.test.ts` builds a real repo with two files and shows that `backup_restore` with `path: "*"` restores neither
+- [x] Run — GREEN
+- [x] Stage three breaks one at a time, each from a `cp` of the clean file: revert the component walk (dangling tests go red), `wx` → `w` (create-never-replaces goes red), remove the `..`/absolute prefilter (lexical tests go red). Restore and re-run green.
+- [x] Commit: `fix(mcp): refuse writes through dangling symlinks; exclusive create and append`
 
 ### Task 2 — Tiers bound to the credential
 

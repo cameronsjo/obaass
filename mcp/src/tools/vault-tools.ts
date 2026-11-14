@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import { escapeRegex } from "../util.js";
 import { updateFrontmatter } from "../vault/frontmatter.js";
-import type { DirectoryEntry, VaultService } from "../vault/vault-service.js";
+import {
+	type DirectoryEntry,
+	FileExistsError,
+	type VaultService,
+} from "../vault/vault-service.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
 
 function textResult(text: string): CallToolResult {
@@ -18,6 +22,45 @@ function jsonResult(
 		content: [{ type: "text", text: JSON.stringify(textData, null, 2) }],
 		structuredContent: data,
 	};
+}
+
+/** A daily-note date. Anything else could steer the path outside the daily folder. */
+const DAILY_NOTE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Offset where a note's body starts: just past a leading `---` frontmatter block. */
+export function bodyStart(note: string): number {
+	const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/.exec(note);
+	return match ? match[0].length : 0;
+}
+
+/**
+ * Insert `content` at the end of the section under `heading`, or add a new
+ * `## heading` section at the end when the note has no such heading. Headings
+ * inside the frontmatter block are not candidates: a YAML comment such as
+ * `# status` would otherwise route the content into the properties.
+ */
+export function insertUnderHeading(
+	note: string,
+	heading: string,
+	content: string,
+): string {
+	const offset = bodyStart(note);
+	const body = note.slice(offset);
+	const headingRegex = new RegExp(
+		`^(#{1,6})\\s+${escapeRegex(heading)}\\s*$`,
+		"m",
+	);
+	const match = headingRegex.exec(body);
+	if (!match) return `${note}\n\n## ${heading}\n\n${content}`;
+	const level = match[1].length;
+	const sectionStart = offset + match.index + match[0].length;
+	const nextHeading = new RegExp(`^#{1,${level}}\\s+`, "m").exec(
+		note.slice(sectionStart),
+	);
+	const insertPos = nextHeading
+		? sectionStart + nextHeading.index
+		: note.length;
+	return `${note.slice(0, insertPos)}\n${content}\n${note.slice(insertPos)}`;
 }
 
 const directoryEntrySchema: z.ZodType<DirectoryEntry> = z.lazy(() =>
@@ -96,12 +139,22 @@ export class VaultToolProvider implements ToolProvider {
 					content: string;
 					overwrite?: boolean;
 				};
-				if (!overwrite && (await this.vault.exists(path))) {
-					return textResult(
+				const exists = () =>
+					textResult(
 						`Error: File already exists at '${path}'. Use overwrite: true to replace.`,
 					);
+				if (overwrite) {
+					await this.vault.writeFile(path, content);
+					return textResult(`Created note at '${path}'.`);
 				}
-				await this.vault.writeFile(path, content);
+				if (await this.vault.exists(path)) return exists();
+				try {
+					// Exclusive: a file that appears after the check above is not replaced.
+					await this.vault.createFile(path, content);
+				} catch (err) {
+					if (err instanceof FileExistsError) return exists();
+					throw err;
+				}
 				return textResult(`Created note at '${path}'.`);
 			},
 		};
@@ -125,32 +178,14 @@ export class VaultToolProvider implements ToolProvider {
 					content: string;
 					heading?: string;
 				};
-				const existing = await this.vault.readFile(path);
-
-				let updated: string;
 				if (heading) {
-					const headingRegex = new RegExp(
-						`^(#{1,6})\\s+${escapeRegex(heading)}\\s*$`,
-						"m",
+					await this.vault.updateIfUnchanged(path, (existing) =>
+						insertUnderHeading(existing, heading, content),
 					);
-					const match = headingRegex.exec(existing);
-					if (match) {
-						const level = match[1].length;
-						const afterHeading = existing.slice(match.index + match[0].length);
-						const nextHeadingRegex = new RegExp(`^#{1,${level}}\\s+`, "m");
-						const nextMatch = nextHeadingRegex.exec(afterHeading);
-						const insertPos = nextMatch
-							? match.index + match[0].length + nextMatch.index
-							: existing.length;
-						updated = `${existing.slice(0, insertPos)}\n${content}\n${existing.slice(insertPos)}`;
-					} else {
-						updated = `${existing}\n\n## ${heading}\n\n${content}`;
-					}
 				} else {
-					updated = `${existing}\n\n${content}`;
+					// O_APPEND: no read-modify-write, so a concurrent edit is kept.
+					await this.vault.appendFile(path, `\n\n${content}`);
 				}
-
-				await this.vault.writeFile(path, updated);
 				return textResult(`Appended to '${path}'.`);
 			},
 		};
@@ -477,12 +512,18 @@ export class VaultToolProvider implements ToolProvider {
 			inputSchema: z.object({
 				date: z
 					.string()
+					.regex(DAILY_NOTE_DATE, "date must be YYYY-MM-DD")
 					.optional()
 					.describe("Date in YYYY-MM-DD format (default: today)"),
 			}),
 			handler: async (params) => {
 				const { date } = params as { date?: string };
 				const targetDate = date ?? new Date().toISOString().slice(0, 10);
+				if (!DAILY_NOTE_DATE.test(targetDate)) {
+					throw new Error(
+						`date must be YYYY-MM-DD, got ${targetDate.length} characters`,
+					);
+				}
 				const folder = this.config.dailyNoteFolder ?? "Daily Notes";
 				const path = `${folder}/${targetDate}.md`;
 
@@ -503,7 +544,15 @@ export class VaultToolProvider implements ToolProvider {
 					content = `---\ndate: ${targetDate}\n---\n\n# ${targetDate}\n\n`;
 				}
 
-				await this.vault.writeFile(path, content);
+				try {
+					await this.vault.createFile(path, content);
+				} catch (err) {
+					// Another client created it since the check: return theirs, never replace.
+					if (err instanceof FileExistsError) {
+						return textResult(await this.vault.readFile(path));
+					}
+					throw err;
+				}
 				return textResult(`Created daily note at '${path}'.\n\n${content}`);
 			},
 		};

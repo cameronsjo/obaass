@@ -484,3 +484,126 @@ describe("VaultToolProvider — instruction and daily-note fallback branches", (
 		expect(content).toContain("## Second\nkeep me");
 	});
 });
+
+describe("VaultToolProvider — write integrity (create, append, daily_note)", () => {
+	let vaultPath: string;
+
+	beforeEach(async () => {
+		vaultPath = await makeTempVault();
+	});
+
+	afterEach(async () => {
+		await cleanupVault(vaultPath);
+	});
+
+	it("create_note without overwrite never replaces a file that appears after its existence check", async () => {
+		// Simulates a concurrent writer: the note does not exist when create_note
+		// checks, then appears before the write. The create must not replace it.
+		class RacingVault extends VaultService {
+			override async exists(path: string): Promise<boolean> {
+				const result = await super.exists(path);
+				await writeVaultFile(vaultPath, path, "written by another client");
+				return result;
+			}
+		}
+		const provider = new VaultToolProvider(
+			new RacingVault(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const text = await callTool(getTool(provider, "create_note"), {
+			path: "race.md",
+			content: "clobber",
+		});
+		expect(text).toMatch(/already exists/i);
+		expect(await new VaultService(vaultPath).readFile("race.md")).toBe(
+			"written by another client",
+		);
+	});
+
+	it("daily_note's schema refuses a date that is not YYYY-MM-DD", () => {
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const schema = getTool(provider, "daily_note").inputSchema;
+		for (const date of ["../Inbox/x", "2026-01-15/../../x", "2026-1-5", ""]) {
+			expect(schema.safeParse({ date }).success).toBe(false);
+		}
+		expect(schema.safeParse({ date: "2026-01-15" }).success).toBe(true);
+	});
+
+	it("daily_note's handler refuses a traversal date even when the schema is bypassed", async () => {
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await expect(
+			callTool(getTool(provider, "daily_note"), { date: "../Inbox/x" }),
+		).rejects.toThrow(/YYYY-MM-DD/);
+		expect(await new VaultService(vaultPath).exists("Inbox/x.md")).toBe(false);
+	});
+
+	it("a tail append keeps content another writer added after the note was read", async () => {
+		// A stale read must not be written back over the file.
+		class StaleReadVault extends VaultService {
+			override async readFile(): Promise<string> {
+				return "stale snapshot";
+			}
+		}
+		await writeVaultFile(vaultPath, "note.md", "current content");
+		const provider = new VaultToolProvider(
+			new StaleReadVault(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await callTool(getTool(provider, "append_to_note"), {
+			path: "note.md",
+			content: "appended",
+		});
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		expect(onDisk).toBe("current content\n\nappended");
+	});
+
+	it("a heading insert refuses when the note changed between read and write", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		class ChangingVault extends VaultService {
+			override async readFile(path: string): Promise<string> {
+				const content = await super.readFile(path);
+				await writeVaultFile(vaultPath, path, `${content}\nconcurrent edit`);
+				return content;
+			}
+		}
+		const provider = new VaultToolProvider(
+			new ChangingVault(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await expect(
+			callTool(getTool(provider, "append_to_note"), {
+				path: "note.md",
+				content: "entry",
+				heading: "Log",
+			}),
+		).rejects.toThrow(/changed/i);
+		expect(await new VaultService(vaultPath).readFile("note.md")).toBe(
+			"## Log\n\nfirst\nconcurrent edit",
+		);
+	});
+
+	it("a heading insert ignores a heading-shaped line inside the frontmatter", async () => {
+		const note = "---\n# status\ntitle: x\n---\n\n# status\n\nbody";
+		await writeVaultFile(vaultPath, "note.md", note);
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await callTool(getTool(provider, "append_to_note"), {
+			path: "note.md",
+			content: "publish: true",
+			heading: "status",
+		});
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		expect(onDisk.startsWith("---\n# status\ntitle: x\n---\n")).toBe(true);
+		expect(onDisk).toBe(
+			"---\n# status\ntitle: x\n---\n\n# status\n\nbody\npublish: true\n",
+		);
+	});
+});
