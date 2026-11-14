@@ -562,6 +562,7 @@ describe("full tier: no writes to hidden paths", () => {
 				},
 			],
 			["append_to_note", { path: ".hidden.md", content: "x" }],
+			["append_to_note", { path: ".private/n.md", content: "x", heading: "H" }],
 			["append_to_note", { path: "notes/gitlink.md", content: "[core]" }],
 			["set_frontmatter", { path: ".private/n.md", properties: { a: 1 } }],
 			["delete_note", { path: ".hidden.md" }],
@@ -585,6 +586,24 @@ describe("full tier: no writes to hidden paths", () => {
 		expect(
 			await readFile(join(vaultPath, ".obsidian/plugins/x/main.js"), "utf8"),
 		).toBe("plugin();");
+	});
+
+	it("refuses daily_note when the configured daily folder is hidden", async () => {
+		await closeMcp();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await start(
+			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
+			{ dailyNoteFolder: ".daily" },
+		);
+		const before = await snapshot();
+		const res = await callTool(
+			"daily_note",
+			{ date: "2026-04-01" },
+			FULL_TOKEN,
+		);
+		expect(res.body.result?.isError, text(res)).toBe(true);
+		expect(text(res)).toMatch(/dot_segment/);
+		expect(await snapshot()).toBe(before);
 	});
 
 	it("still reads hidden paths, and a rename skips links inside hidden notes", async () => {

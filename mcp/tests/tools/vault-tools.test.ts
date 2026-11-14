@@ -645,6 +645,21 @@ describe("daily-note template spellings", () => {
 		await cleanupVault(vaultPath);
 	});
 
+	it("falls back to the default note when only a folder has the template's name", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(vaultPath, "Templates/daily/stray.md", "x");
+		const provider = new VaultToolProvider(new VaultService(vaultPath), {
+			...makeConfig(vaultPath),
+			dailyNoteTemplate: "Templates/daily",
+		} as Config);
+		const text = await callTool(getTool(provider, "daily_note"), {
+			date: "2026-03-03",
+		});
+		expect(text).toContain("# 2026-03-03");
+		expect(text).not.toContain("stray");
+		await cleanupVault(vaultPath);
+	});
+
 	it("lists both spellings unless the setting already ends in .md", () => {
 		expect(templateSpellings("Templates/daily.v2")).toEqual([
 			"Templates/daily.v2.md",
