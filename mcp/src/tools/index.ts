@@ -1,3 +1,4 @@
+import { type Access, toolAllowed } from "./tiers.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
 
 export class ToolRegistry {
@@ -11,9 +12,17 @@ export class ToolRegistry {
 		return this.providers.flatMap((p) => p.getTools());
 	}
 
-	/** Tools to serve; read-only mode withholds every tool not marked `readOnly`. */
-	getServedTools(readOnly: boolean): ToolDefinition[] {
-		return this.getAllTools().filter((tool) => !readOnly || tool.readOnly);
+	/**
+	 * Tools to serve for `access` — the single enforcement point for tiers. An
+	 * undefined access (no valid tier) serves nothing.
+	 */
+	getServedTools(access: Access | undefined): ToolDefinition[] {
+		return this.getAllTools().filter((tool) => toolAllowed(access, tool.name));
+	}
+
+	/** Every registered tool name, for logging only names that exist. */
+	getToolNames(): ReadonlySet<string> {
+		return new Set(this.getAllTools().map((tool) => tool.name));
 	}
 
 	findTool(name: string): ToolDefinition | undefined {

@@ -1,9 +1,10 @@
 import { stat } from "node:fs/promises";
 import type { Request, Response } from "express";
 import { hasValidBearer } from "./auth.js";
-import type { Config } from "./config.js";
+import { type Config, configuredTokens } from "./config.js";
 import type { BackupClient } from "./integrations/backup-client.js";
 import type { PluginClient } from "./integrations/plugin-client.js";
+import { hasTokens } from "./tools/tiers.js";
 import type { VaultService } from "./vault/vault-service.js";
 
 export interface HealthDeps {
@@ -18,11 +19,13 @@ export function createHealthHandler(deps: HealthDeps) {
 	return async (req: Request, res: Response): Promise<void> => {
 		const { config, vault, backupClient, pluginClient, startTime } = deps;
 
-		// Callers without the token, and everyone in unauthenticated read-only
-		// mode, get status only: no vault path, internal URLs, scan, or probes.
-		const detailed = config.authToken
-			? hasValidBearer(req, config.authToken)
-			: !config.readOnly;
+		// Detail (vault path, internal URLs, scan, probes) only for the full token,
+		// or in the local no-token mode. Limited and anonymous callers, and
+		// everyone in a limited-only deployment, get status only.
+		const tokens = configuredTokens(config);
+		const detailed = tokens.full
+			? hasValidBearer(req, tokens.full)
+			: !hasTokens(tokens) && !config.anonymous;
 		if (!detailed) {
 			const up = await stat(config.vaultPath).then(
 				(s) => s.isDirectory(),

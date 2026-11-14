@@ -1,19 +1,109 @@
+import { randomUUID } from "node:crypto";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
+import {
+	type AuthInfo,
+	type McpRequestContext,
+	McpServer,
+	createMcpHandler,
+} from "@modelcontextprotocol/server";
 import express, { type Request, type Response } from "express";
 import { bearerAuthMiddleware } from "./auth.js";
 import { httpSecurityMiddleware } from "./http-security.js";
 import { logger } from "./logger.js";
 import type { ToolRegistry } from "./tools/index.js";
+import {
+	type Access,
+	type AccessOptions,
+	RefusalLog,
+	type TierTokens,
+	hasTokens,
+	resolveAccess,
+	toolAllowed,
+} from "./tools/tiers.js";
+import { WRITTEN_META_KEY } from "./tools/vault-tools.js";
+import { AccessRefusal, CallerError } from "./vault/vault-service.js";
 
 /** JSON-RPC internal-error code (per the spec). */
 const JSONRPC_INTERNAL_ERROR = -32603;
+/** JSON-RPC implementation-defined server error, used for the rate limit. */
+const JSONRPC_RATE_LIMITED = -32000;
+
+/** Server-assigned per-request id; any client-supplied value is replaced. */
+const REQUEST_ID_HEADER = "x-obaass-request-id";
+/** Shape a gateway-supplied correlation id must have to be recorded. */
+const UPSTREAM_REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * JSON-RPC messages per minute allowed to each non-`full` access level, across
+ * all its clients. Every message in a batch counts.
+ */
+export const RESTRICTED_REQUESTS_PER_MINUTE = 120;
+const RATE_WINDOW_MS = 60_000;
 
 export interface McpAppOptions {
-	/** Require `Authorization: Bearer <token>` on the MCP path (not /health). */
-	authToken?: string | undefined;
-	/** Serve only tools marked `readOnly`. */
-	readOnly?: boolean;
+	/** Configured bearer tokens. With any set, every MCP request needs one. */
+	tokens?: TierTokens;
+	/** MCP_ALLOW_UNAUTHENTICATED with no token: serve the anonymous read set. */
+	anonymous?: boolean;
+	/** Header a gateway may send with its own request id (correlation only). */
+	upstreamRequestIdHeader?: string;
+	/** Messages per minute for each non-`full` access level; defaults to RESTRICTED_REQUESTS_PER_MINUTE. */
+	restrictedRequestsPerMinute?: number;
+}
+
+const KNOWN_APP_OPTIONS: ReadonlySet<string> = new Set([
+	"tokens",
+	"anonymous",
+	"upstreamRequestIdHeader",
+	"restrictedRequestsPerMinute",
+]);
+
+interface CallIds {
+	requestId: string;
+	upstreamRequestId?: string;
+}
+
+/** Fixed-window request counter per access level. */
+class RateLimiter {
+	private windows = new Map<Access, { start: number; count: number }>();
+
+	constructor(
+		private readonly cap: number,
+		private readonly now: () => number = Date.now,
+	) {}
+
+	/** Counts `messages` JSON-RPC messages, so one batch POST cannot carry 100 calls as one. */
+	allow(access: Access, messages: number): boolean {
+		const now = this.now();
+		let window = this.windows.get(access);
+		if (!window || now - window.start >= RATE_WINDOW_MS) {
+			window = { start: now, count: 0 };
+			this.windows.set(access, window);
+		}
+		window.count += messages;
+		return window.count <= this.cap;
+	}
+}
+
+function callIds(
+	headers: Headers | undefined,
+	upstreamHeader: string | undefined,
+): CallIds {
+	const requestId = headers?.get(REQUEST_ID_HEADER) ?? "unassigned";
+	const upstream = upstreamHeader ? headers?.get(upstreamHeader) : undefined;
+	return upstream && UPSTREAM_REQUEST_ID.test(upstream)
+		? { requestId, upstreamRequestId: upstream }
+		: { requestId };
+}
+
+/** Out-of-tier `tools/call` names in a parsed JSON-RPC body (single or batch). */
+function outOfTierCalls(body: unknown, access: Access | undefined): string[] {
+	const messages = Array.isArray(body) ? body : [body];
+	return messages.flatMap((message) => {
+		const m = message as { method?: unknown; params?: { name?: unknown } };
+		const name = m?.method === "tools/call" ? m.params?.name : undefined;
+		return typeof name === "string" && !toolAllowed(access, name) ? [name] : [];
+	});
 }
 
 export function createMcpApp(
@@ -21,11 +111,41 @@ export function createMcpApp(
 	mcpPath: string,
 	options: McpAppOptions = {},
 ) {
+	// An unrecognized key (such as the retired `authToken`) would otherwise be
+	// ignored and leave the endpoint without authentication.
+	const unknownKeys = Object.keys(options).filter(
+		(key) => !KNOWN_APP_OPTIONS.has(key),
+	);
+	if (unknownKeys.length > 0) {
+		throw new Error(
+			`createMcpApp: unknown option(s) ${unknownKeys.join(", ")}; expected ${[...KNOWN_APP_OPTIONS].join(", ")}`,
+		);
+	}
+	const accessOptions: AccessOptions = {
+		tokens: options.tokens ?? {},
+		anonymous: options.anonymous,
+	};
+	const refusals = new RefusalLog(registry.getToolNames());
+	const flushTimer = setInterval(() => refusals.flush(), RATE_WINDOW_MS);
+	flushTimer.unref();
+	const cap =
+		options.restrictedRequestsPerMinute ?? RESTRICTED_REQUESTS_PER_MINUTE;
+	if (!Number.isInteger(cap) || cap < 1) {
+		throw new Error(
+			"createMcpApp: restrictedRequestsPerMinute must be a positive integer",
+		);
+	}
+	const limiter = new RateLimiter(cap);
+
 	const app = express();
 	app.use(httpSecurityMiddleware());
+	app.use(mcpPath, (req, _res, next) => {
+		req.headers[REQUEST_ID_HEADER] = randomUUID();
+		next();
+	});
 	// Before body parsing so an unauthenticated request never reaches the parser.
-	if (options.authToken) {
-		app.use(mcpPath, bearerAuthMiddleware(options.authToken));
+	if (hasTokens(accessOptions.tokens)) {
+		app.use(mcpPath, bearerAuthMiddleware(accessOptions.tokens));
 	}
 	app.use(express.json());
 	const onerror = (error: Error) => {
@@ -33,7 +153,13 @@ export function createMcpApp(
 	};
 	// Fresh server per request for both 2026-07-28 and older stateless clients.
 	const handler = createMcpHandler(
-		() => createServer(registry, !!options.readOnly),
+		(ctx: McpRequestContext) =>
+			createServer(
+				registry,
+				resolveAccess(accessOptions, ctx.authInfo),
+				callIds(ctx.requestInfo?.headers, options.upstreamRequestIdHeader),
+				refusals,
+			),
 		{
 			legacy: "stateless",
 			// This app publishes no events; do not retain idle subscription streams.
@@ -43,16 +169,42 @@ export function createMcpApp(
 	);
 	const nodeHandler = toNodeHandler(handler, { onerror });
 	// Keep express.json's existing body limit and pass its consumed body explicitly.
-	app.post(mcpPath, (req: Request, res: Response) =>
-		nodeHandler(req, res, req.body),
-	);
+	app.post(mcpPath, (req: Request, res: Response) => {
+		const auth = (req as Request & { auth?: AuthInfo }).auth;
+		const access = resolveAccess(accessOptions, auth);
+		const requestId = String(req.headers[REQUEST_ID_HEADER]);
+		const messages = Array.isArray(req.body) ? Math.max(req.body.length, 1) : 1;
+		if (access && access !== "full" && !limiter.allow(access, messages)) {
+			refusals.record(access, undefined, "rate_limited", requestId);
+			res.status(429).json({
+				jsonrpc: "2.0",
+				error: {
+					code: JSONRPC_RATE_LIMITED,
+					message: `Rate limit exceeded for this access tier (${cap} messages per minute, shared by every client of the tier, batches counted per message); retry later.`,
+				},
+				id: null,
+			});
+			return;
+		}
+		// The SDK refuses an unregistered tool with no callback, so the audit
+		// line for an out-of-tier call is taken from the parsed body here.
+		for (const name of outOfTierCalls(req.body, access)) {
+			refusals.record(access ?? "none", name, "out_of_tier", requestId);
+		}
+		return nodeHandler(req, res, req.body);
+	});
 
 	// GET-based SSE and session resumption remain unsupported; modern exchanges
 	// and legacy stateless requests are served through POST.
 	app.get(mcpPath, methodNotAllowed);
 	app.delete(mcpPath, methodNotAllowed);
 
-	return { app, close: handler.close };
+	const close = async () => {
+		clearInterval(flushTimer);
+		refusals.flush();
+		await handler.close();
+	};
+	return { app, close };
 }
 
 function methodNotAllowed(_req: Request, res: Response): void {
@@ -73,13 +225,45 @@ function describeInputKeys(input: unknown): string {
 	return ` (args: ${shown.join(", ")}${suffix})`;
 }
 
-function createServer(registry: ToolRegistry, readOnly: boolean): McpServer {
+const FS_ERROR_TEXT: Readonly<Record<string, string>> = {
+	ENOENT: "note or folder not found",
+	ENOTDIR: "a path component is a file, not a folder",
+	EISDIR: "the path is a folder, not a note",
+	EEXIST: "a note already exists at that path",
+	EACCES: "permission denied",
+	EPERM: "permission denied",
+};
+
+function describeFsError(code: string): string {
+	return FS_ERROR_TEXT[code] ?? `file system error (${code})`;
+}
+
+function errorResult(toolName: string, keys: string, message: string) {
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: `Error in '${toolName}'${keys}: ${message}`,
+			},
+		],
+		isError: true,
+	};
+}
+
+function createServer(
+	registry: ToolRegistry,
+	access: Access | undefined,
+	ids: CallIds,
+	refusals: RefusalLog,
+): McpServer {
 	const server = new McpServer({
 		name: "obaass-mcp",
 		version: "0.1.0",
 	});
+	// No valid access (auth configured, tier missing or unknown): register nothing.
+	if (!access) return server;
 
-	for (const tool of registry.getServedTools(readOnly)) {
+	for (const tool of registry.getServedTools(access)) {
 		server.registerTool(
 			tool.name,
 			{
@@ -89,33 +273,51 @@ function createServer(registry: ToolRegistry, readOnly: boolean): McpServer {
 				annotations: { readOnlyHint: tool.readOnly === true },
 			},
 			async (params) => {
-				if (!tool.readOnly) {
-					// Audit trail for state-changing calls; keys only, never values.
-					logger.info("Dispatching write tool", {
-						tool: tool.name,
-						args: describeInputKeys(params),
-					});
-				}
+				// Keys only, never values: they may carry secrets or note content.
+				const keys = describeInputKeys(params);
+				const fields = { tool: tool.name, tier: access, ...ids, args: keys };
+				if (tool.readOnly) logger.debug("Dispatching read tool", fields);
+				else logger.info("Dispatching write tool", fields);
 				try {
-					return await tool.handler(params as Record<string, unknown>);
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					// Identify the failing tool and which args were supplied (keys only —
-					// values may carry secrets) so agents get an actionable error.
-					const keys = describeInputKeys(params);
-					logger.error(`Tool '${tool.name}' failed`, {
-						error: message,
-						args: keys,
+					const result = await tool.handler(params as Record<string, unknown>, {
+						access,
 					});
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Error in '${tool.name}'${keys}: ${message}`,
-							},
-						],
-						isError: true,
-					};
+					const written = result._meta?.[WRITTEN_META_KEY];
+					if (access !== "full" && typeof written === "string") {
+						// The one place a restricted write's target is recorded, so a misused
+						// credential's writes can be reconstructed. Content is never logged.
+						logger.info("Restricted write applied", {
+							...fields,
+							target: written,
+						});
+					}
+					return result;
+				} catch (err) {
+					if (err instanceof AccessRefusal) {
+						// Refusal messages carry no path; the audit line carries the kind.
+						refusals.record(access, tool.name, err.kind, ids.requestId);
+						return errorResult(tool.name, keys, err.message);
+					}
+					const message = err instanceof Error ? err.message : String(err);
+					const code = (err as NodeJS.ErrnoException | undefined)?.code;
+					// Restricted callers (and their log lines) never see a raw message: a
+					// filesystem error embeds the absolute vault path, and other errors can
+					// embed caller text or note content. Only CallerError text is safe.
+					let shown = message;
+					let logged = message;
+					if (access !== "full" && !(err instanceof CallerError)) {
+						const name = err instanceof Error ? err.name : "Error";
+						shown =
+							typeof code === "string"
+								? describeFsError(code)
+								: `the call failed (${name})`;
+						logged = typeof code === "string" ? code : name;
+					}
+					logger.error(`Tool '${tool.name}' failed`, {
+						...fields,
+						error: logged,
+					});
+					return errorResult(tool.name, keys, shown);
 				}
 			},
 		);

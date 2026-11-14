@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22-alpine AS builder
+FROM node:22.23.5-alpine3.24 AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-alpine AS production
+FROM node:22.23.5-alpine3.24 AS production
 LABEL org.opencontainers.image.source="https://github.com/cameronsjo/obaass"
 LABEL org.opencontainers.image.description="Unified MCP server for the OBaaSS stack"
 
@@ -28,8 +28,9 @@ RUN addgroup -g 1001 nodejs && adduser -u 1001 -G nodejs -D nodejs
 USER nodejs
 
 # A container must bind all interfaces for its published port to work, so the
-# server refuses to start until MCP_AUTH_TOKEN (or the read-only opt-out
-# MCP_ALLOW_UNAUTHENTICATED=true) is supplied at run time. Never bake the token in.
+# server refuses to start until MCP_AUTH_TOKEN or MCP_AUTH_TOKEN_LIMITED (or the
+# anonymous opt-out MCP_ALLOW_UNAUTHENTICATED=true) is supplied at run time.
+# Never bake a token in.
 ENV NODE_ENV=production \
     MCP_HTTP_PORT=3000 \
     MCP_HTTP_HOST=0.0.0.0 \

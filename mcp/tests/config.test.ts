@@ -22,6 +22,9 @@ describe("loadConfig", () => {
 			"DAILY_NOTE_FOLDER",
 			"DAILY_NOTE_TEMPLATE",
 			"MCP_AUTH_TOKEN",
+			"MCP_AUTH_TOKEN_LIMITED",
+			"MCP_UPSTREAM_REQUEST_ID_HEADER",
+			"MCP_LIMITED_WRITE_DIRS",
 			"MCP_ALLOW_UNAUTHENTICATED",
 			"MCP_ALLOWED_HOSTS",
 		]) {
@@ -41,7 +44,7 @@ describe("loadConfig", () => {
 		expect(config.httpPort).toBe(3000);
 		expect(config.httpHost).toBe("127.0.0.1");
 		expect(config.authToken).toBeUndefined();
-		expect(config.readOnly).toBe(false);
+		expect(config.anonymous).toBe(false);
 		expect(config.httpPath).toBe("/mcp");
 		expect(config.logLevel).toBe("info");
 		expect(config.backupUrl).toBeUndefined();
@@ -98,7 +101,7 @@ describe("loadConfig", () => {
 			process.env.MCP_AUTH_TOKEN = token;
 			const config = loadConfig();
 			expect(config.authToken).toBe(token);
-			expect(config.readOnly).toBe(false);
+			expect(config.anonymous).toBe(false);
 		});
 
 		it("starts read-only on a non-loopback bind with the explicit opt-out", () => {
@@ -106,15 +109,15 @@ describe("loadConfig", () => {
 			process.env.MCP_ALLOW_UNAUTHENTICATED = "true";
 			const config = loadConfig();
 			expect(config.authToken).toBeUndefined();
-			expect(config.readOnly).toBe(true);
-			expect(config.accessWarning).toMatch(/read-only/);
+			expect(config.anonymous).toBe(true);
+			expect(config.accessWarning).toMatch(/anonymous read tools/);
 		});
 
 		it("refuses a tokenless loopback bind when MCP_ALLOWED_HOSTS is set", () => {
 			process.env.MCP_ALLOWED_HOSTS = "vault.example.ts.net";
 			expect(() => loadConfig()).toThrow(/MCP_ALLOWED_HOSTS/);
 			process.env.MCP_AUTH_TOKEN = token;
-			expect(loadConfig().readOnly).toBe(false);
+			expect(loadConfig().anonymous).toBe(false);
 		});
 
 		it("refuses a localhost name bind without a token", () => {
@@ -145,6 +148,86 @@ describe("loadConfig", () => {
 		it("treats an empty MCP_AUTH_TOKEN as unset", () => {
 			process.env.MCP_AUTH_TOKEN = "";
 			expect(loadConfig().authToken).toBeUndefined();
+		});
+
+		it("treats an empty MCP_AUTH_TOKEN_LIMITED as unset", () => {
+			process.env.MCP_AUTH_TOKEN_LIMITED = "";
+			expect(loadConfig().limitedAuthToken).toBeUndefined();
+		});
+
+		it("an empty limited token leaves full alone and never opens unauthenticated access", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			process.env.MCP_AUTH_TOKEN_LIMITED = "";
+			expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
+			process.env.MCP_AUTH_TOKEN = "f".repeat(64);
+			const config = loadConfig();
+			expect(config.limitedAuthToken).toBeUndefined();
+			expect(config.authToken).toBe("f".repeat(64));
+			expect(config.anonymous).toBe(false);
+		});
+
+		it.each(["short", " ".repeat(40)])(
+			"a malformed limited token refuses startup even with a valid full token (%j)",
+			(value) => {
+				process.env.MCP_AUTH_TOKEN = "f".repeat(64);
+				process.env.MCP_AUTH_TOKEN_LIMITED = value;
+				expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN_LIMITED/);
+			},
+		);
+
+		it("starts on a non-loopback bind with only the limited token", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			process.env.MCP_AUTH_TOKEN_LIMITED = "q".repeat(64);
+			const config = loadConfig();
+			expect(config.authToken).toBeUndefined();
+			expect(config.limitedAuthToken).toBe("q".repeat(64));
+			expect(config.anonymous).toBe(false);
+		});
+
+		it("refuses equal full and limited tokens, naming both and echoing neither", () => {
+			const value = "z".repeat(64);
+			process.env.MCP_AUTH_TOKEN = value;
+			process.env.MCP_AUTH_TOKEN_LIMITED = value;
+			let message = "";
+			try {
+				loadConfig();
+			} catch (err) {
+				message = (err as Error).message;
+			}
+			expect(message).toMatch(/MCP_AUTH_TOKEN_LIMITED.*MCP_AUTH_TOKEN/);
+			expect(message).not.toContain("zzzz");
+		});
+
+		it.each(["short", " ".repeat(40), `${"k".repeat(31)} x`])(
+			"rejects a weak or malformed MCP_AUTH_TOKEN_LIMITED %j",
+			(value) => {
+				process.env.MCP_AUTH_TOKEN_LIMITED = value;
+				expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN_LIMITED/);
+			},
+		);
+
+		it("parses MCP_LIMITED_WRITE_DIRS and refuses unsafe entries", () => {
+			expect(loadConfig().limitedWriteDirs).toBeUndefined();
+			process.env.MCP_LIMITED_WRITE_DIRS = " Inbox/ , ./Claude/Notes ,";
+			expect(loadConfig().limitedWriteDirs).toEqual(["Inbox", "Claude/Notes"]);
+			for (const bad of ["../x", "/abs", "a/../b", ".obsidian", "a//b"]) {
+				process.env.MCP_LIMITED_WRITE_DIRS = bad;
+				expect(() => loadConfig(), bad).toThrow(/MCP_LIMITED_WRITE_DIRS/);
+			}
+			process.env.MCP_LIMITED_WRITE_DIRS = "";
+			expect(loadConfig().limitedWriteDirs).toBeUndefined();
+			for (const empty of [" , ", ",", "/", "./"]) {
+				process.env.MCP_LIMITED_WRITE_DIRS = empty;
+				expect(() => loadConfig(), empty).toThrow(/names no folder/);
+			}
+		});
+
+		it("defaults and validates the upstream request id header", () => {
+			expect(loadConfig().upstreamRequestIdHeader).toBe("x-request-id");
+			process.env.MCP_UPSTREAM_REQUEST_ID_HEADER = "X-Gateway-Id";
+			expect(loadConfig().upstreamRequestIdHeader).toBe("x-gateway-id");
+			process.env.MCP_UPSTREAM_REQUEST_ID_HEADER = "bad header";
+			expect(() => loadConfig()).toThrow(/MCP_UPSTREAM_REQUEST_ID_HEADER/);
 		});
 
 		it.each(["short", " ".repeat(40), `${"k".repeat(31)} x`])(

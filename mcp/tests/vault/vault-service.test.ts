@@ -288,3 +288,18 @@ describe("VaultService", () => {
 		});
 	});
 });
+
+describe("findByProperty with non-mapping frontmatter", () => {
+	it("skips a note whose frontmatter is a scalar or a list instead of throwing", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(vaultPath, "scalar.md", "---\nx\n---\nbody");
+		await writeVaultFile(vaultPath, "list.md", "---\n- a\n---\nbody");
+		await writeVaultFile(vaultPath, "map.md", "---\nstatus: on\n---\nbody");
+		const vault = new VaultService(vaultPath);
+		await expect(vault.findByProperty("status")).resolves.toEqual([
+			{ path: "map.md", value: "on" },
+		]);
+		await expect(vault.findByProperty("length")).resolves.toEqual([]);
+		await cleanupVault(vaultPath);
+	});
+});

@@ -8,12 +8,11 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "html", "lcov"],
       include: ["src/**/*.ts"],
-      // index.ts: process bootstrap (main()); logger.ts/health.ts: thin I/O wired in
+      // index.ts: process bootstrap (main()); logger.ts: thin I/O wired in
       // main(); types.ts: type-only declarations (no executable code).
       exclude: [
         "src/index.ts",
         "src/logger.ts",
-        "src/health.ts",
         "src/tools/types.ts",
       ],
       thresholds: {

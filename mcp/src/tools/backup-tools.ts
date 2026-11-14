@@ -23,12 +23,15 @@ function jsonResult(data: Record<string, unknown>): CallToolResult {
 
 /**
  * Run a git command safely against the vault directory.
- * Uses execFile (not exec) to prevent shell injection.
+ * Uses execFile (not exec) to prevent shell injection. GIT_LITERAL_PATHSPECS
+ * makes every path argument a literal file name: without it, a caller's `*` or
+ * `:(glob)…` restores or reads every matching file instead of one note.
  */
 async function git(vaultPath: string, args: string[]): Promise<string> {
 	const { stdout } = await execFileAsync("git", ["-C", vaultPath, ...args], {
 		timeout: 30_000,
 		maxBuffer: 10 * 1024 * 1024,
+		env: { ...process.env, GIT_LITERAL_PATHSPECS: "1" },
 	});
 	return stdout;
 }
