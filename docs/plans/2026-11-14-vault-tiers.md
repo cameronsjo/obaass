@@ -124,7 +124,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 - `auth.ts`: `bearerAuthMiddleware(tokens: TierTokens, now?)` compares the presented token against every configured token (hash-then-`timingSafeEqual`, all compared) and sets `req.auth = { token, clientId: <tier>, scopes: [] }`. The factory reads `clientId` only. No log line includes `authInfo`.
 - `server.ts`: `McpAppOptions` takes `tokens: TierTokens` and `anonymous: boolean` in place of `authToken`/`readOnly`. The middleware is mounted whenever any token is configured.
 - `health.ts`: detailed health only for a request that presents the `full` token, or when no token is configured and the bind is loopback (today's local mode). `limited`, `anonymous`, and unauthenticated callers get status only.
-- `vault/vault-service.ts`: `resolveSafe` walks each existing component below `realpath(vaultPath)`. Each symlink must `realpath` inside the real root. A dangling symlink is refused. Only `ENOENT` ends the walk as "does not exist"; `ENOTDIR`, `ELOOP`, and `EACCES` refuse. New `createFile` (`flag: "wx"`) and `appendFile` (`flag: "a"`).
+- `vault/vault-service.ts`: `resolveSafe` walks each existing component below `realpath(vaultPath)`. Each symlink must `realpath` inside the real root. A dangling symlink is refused. Only `ENOENT` and `ENOTDIR` end the walk as "does not exist"; `ELOOP` and `EACCES` refuse. New `createFile` (`flag: "wx"`) and `appendFile` (`flag: "a"`).
 - `VaultService.withPolicy(policy)` returns a policy-bound service; the policy is an option on the service itself, so internal walks filter too. Under the `limited`/`anonymous` policy:
   - No path segment starting with `.`, checked on the requested path and on the resolved real path relative to the real root.
   - Walks and trees skip dot entries.
@@ -173,7 +173,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 - MUST treat an empty `MCP_AUTH_TOKEN_LIMITED` as unset. When set, it MUST meet the existing length and whitespace rules and differ from `MCP_AUTH_TOKEN`. Each error names the variable and the fix and interpolates no token value.
 - MUST mount the bearer middleware whenever any token is configured.
 - MUST define every non-`full` tier as a literal allowlist.
-- MUST NOT log token values, `authInfo`, tool argument values, note content, or paths in new refusal messages.
+- MUST NOT log token values, `authInfo`, tool argument values, note content, or paths in new refusal messages. One exception: a successful restricted write logs the target note's path (never its content), so a misused credential's writes can be reconstructed.
 - Tests use throwaway token values only. No real credential is generated or rotated.
 - This repo is public: no host names, addresses, or deployment detail in code, commits, the PR, or this plan.
 - No merge to `main` (which publishes `latest`) and no `v*` tag without Cameron's go. The Opus security review runs before the merge.
@@ -231,7 +231,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 - [x] Extend `containment.test.ts`: `deleteFile`, `exists`, and rename-source through every escaping link; lexical escapes for `exists`; a populated `outside/sub` read, deleted, and renamed through `linkdir/`; `createFile` symlink cases matched to the refusal regex, not a bare throw
 - [x] RED tests in `vault-tools.test.ts`: `create_note` without `overwrite` onto an existing note leaves it unchanged; `daily_note` with `date: "../x"` is refused; a tail append keeps a byte written by another writer between read and write; a heading insert refuses when the note changed; a heading-looking YAML comment inside frontmatter is not a target
 - [x] Run — RED on the dangling-symlink, create-onto-existing, and `daily_note` cases
-- [x] Fix `resolveSafe` (walk below the real root; dangling refused; only `ENOENT` ends the walk); add `createFile` (`wx`) and `appendFile` (`a`); `create_note` without `overwrite` and `daily_note` use `createFile`; tail append uses `appendFile`; heading insert searches after frontmatter and checks mtime and size before writing; `date` schema `^\d{4}-\d{2}-\d{2}$`
+- [x] Fix `resolveSafe` (walk below the real root; dangling refused; only `ENOENT` and `ENOTDIR` end the walk); add `createFile` (`wx`) and `appendFile` (`a`); `create_note` without `overwrite` and `daily_note` use `createFile`; tail append uses `appendFile`; heading insert searches after frontmatter and checks mtime and size before writing; `date` schema `^\d{4}-\d{2}-\d{2}$`
 - [x] Backup git calls run with `GIT_LITERAL_PATHSPECS=1` in the `execFile` env. `backup-git.test.ts` builds a real repo with two files and shows that `backup_restore` with `path: "*"` restores neither
 - [x] Run — GREEN
 - [x] Stage three breaks one at a time, each from a `cp` of the clean file: revert the component walk (dangling tests go red), `wx` → `w` (create-never-replaces goes red), remove the `..`/absolute prefilter (lexical tests go red). Restore and re-run green.
@@ -348,13 +348,24 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - `mcp/src/tools/{tiers,index,types,vault-tools,backup-tools,plugin-tools}.ts`
   - `mcp/src/vault/vault-service.ts`
   - `toNodeHandler` in `mcp/node_modules/@modelcontextprotocol/node/dist/index.mjs`
-- [ ] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI green; flip ready; report ready on CAM-720 and `hc send t5k`
+- [ ] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI image build green and the local suite green at head (CI runs no test job; follow-up issue); flip ready; report ready on CAM-720 and `hc send t5k`
 - [ ] File on `cameronsjo/obsidi-backup`: the Untitled renamer's `sanitize_title` keeps a leading `.`, so content a `limited` client writes can steer a rename to a dot-prefixed name
 - [ ] After Cameron's go: bump `0.1.0` → `0.2.0` in `package.json`, `server.ts`, `health.ts`, and the changelog heading; merge; tag `v0.2.0`; run `scripts/release-handoff.sh v0.2.0`; post its output on CAM-720
 
 ---
 
 ## Deviations
+
+- **2026-11-14 — PR review round 1.**
+  - The refusal trail gets an HTTP-level test, which goes red when the `refusals.record` calls are removed.
+  - The rate cap is a `createMcpApp` option, so the test runs at 3 rather than sending 121 requests.
+  - Template spellings handle dotted names (`daily.v2` → `daily.v2.md`) and a leading `/`, and `daily_note` reads an extensionless template from its `.md` file.
+  - `ENOTDIR` ends the walk (amended in Architecture and Task 1).
+  - The no-argument-values constraint carves out the restricted write target.
+  - `RefusalKind` derives from `AccessRefusalKind`.
+  - `health.ts` is back under the coverage gate.
+  - The anonymous call test runs in both eras.
+  - The ready gate is reworded, because CI runs no test job (follow-up issue).
 
 - **2026-11-14 — Attestation pass and its nits.** The fresh Opus security pass at `7671339` found no Critical or Important issue; every prior issue was closed. Its three nits were folded after it, under the orchestrator's favor-action instruction:
   - Write tools report what they wrote (`_meta` `obaass/written`), so `daily_note` gets an audit target and a no-op create is not logged as applied. "Already exists" is now `isError`.
@@ -375,7 +386,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 - **2026-11-14 — Polish: refusal kinds and messages differ from the Logging section.** The kind set dropped `write_scope` (D1 removed the folder allowlist) and gained `protected_path`, `write_operation`, and `rate_limited`. Refusal messages name the rule but not the tier, because `VaultService` does not know the caller's tier; the audit line carries `tier`. The two new containment messages no longer include the path. The older traversal messages still echo the caller's own path back to the caller, and none is logged.
 - **2026-11-14 — Polish: `appendFile` opens with `O_WRONLY|O_APPEND` and no `O_CREAT`**, so an append to a missing note fails as before instead of creating it. This is an improvement over the plan's `flag: "a"`.
 - **2026-11-14 — Polish: the rate cap counts JSON-RPC messages, not HTTP requests.** Review found that one legacy batch POST carried up to 100 calls past a per-request cap.
-- **2026-11-14 — Polish: instruction files match `CLAUDE*.md`, `AGENTS*.md`, and `GEMINI*.md` by basename prefix** (for example `CLAUDE.local.md` and `AGENTS.override.md`), not three exact names. A `CLAUDE.md` `@path` import that makes another note an instruction is documented as part of the D1 residual.
+- **2026-11-14 — Polish: instruction files match a basename of `CLAUDE`, `AGENTS`, or `GEMINI` with an optional `.variant` before `.md`** (for example `CLAUDE.local.md` and `AGENTS.override.md`), not three exact names. A `CLAUDE.md` `@path` import that makes another note an instruction is documented as part of the D1 residual.
 - **2026-11-14 — Task 5: the merge job's `digest` output was dropped.** It had no consumer; the job summary and `scripts/release-handoff.sh` carry the digest.
 
 - **2026-11-14 — Task 2: `createMcpApp` throws on unknown option keys.** Migrating the tests showed that a caller still passing the retired `{ authToken }` option got an app with no bearer middleware and no error (vitest does not type-check). This is a chosen improvement: an unrecognized option now refuses to build the app.

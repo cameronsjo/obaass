@@ -12,6 +12,7 @@
  */
 import { createHash } from "node:crypto";
 import { logger } from "../logger.js";
+import type { AccessRefusalKind } from "../vault/vault-service.js";
 
 /** Tiers a bearer token can select. */
 export const TIERS = ["full", "limited"] as const;
@@ -121,19 +122,7 @@ export function tokenFingerprints(
 }
 
 /** Why a request was refused; a fixed set so log keys stay finite. */
-export type RefusalKind =
-	| "out_of_tier"
-	| "dot_segment"
-	| "non_md"
-	| "symlink"
-	| "outside_root"
-	| "instruction_file"
-	| "protected_path"
-	| "write_scope"
-	| "write_operation"
-	| "overwrite"
-	| "regex"
-	| "rate_limited";
+export type RefusalKind = AccessRefusalKind | "out_of_tier" | "rate_limited";
 
 const REFUSAL_WINDOW_MS = 60_000;
 

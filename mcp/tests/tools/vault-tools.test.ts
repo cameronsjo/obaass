@@ -4,6 +4,7 @@ import type { ToolDefinition } from "../../src/tools/types.js";
 import {
 	VaultToolProvider,
 	insertUnderHeading,
+	templateSpellings,
 } from "../../src/tools/vault-tools.js";
 import { VaultService } from "../../src/vault/vault-service.js";
 import { cleanupVault, makeTempVault, writeVaultFile } from "../helpers.js";
@@ -607,6 +608,35 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		expect(onDisk).toBe(
 			"---\n# status\ntitle: x\n---\n\n# status\n\nbody\npublish: true\n",
 		);
+	});
+});
+
+describe("daily-note template spellings", () => {
+	it("reads an extensionless, root-slashed template setting from its .md file", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(
+			vaultPath,
+			"Templates/daily.md",
+			"# {{date}} from template",
+		);
+		const provider = new VaultToolProvider(new VaultService(vaultPath), {
+			...makeConfig(vaultPath),
+			dailyNoteTemplate: "/Templates/daily",
+		} as Config);
+		const text = await callTool(getTool(provider, "daily_note"), {
+			date: "2026-03-01",
+		});
+		expect(text).toContain("# 2026-03-01 from template");
+		await cleanupVault(vaultPath);
+	});
+
+	it("lists both spellings unless the setting already ends in .md", () => {
+		expect(templateSpellings("Templates/daily.v2")).toEqual([
+			"Templates/daily.v2",
+			"Templates/daily.v2.md",
+		]);
+		expect(templateSpellings("/T/d.MD")).toEqual(["T/d.MD"]);
+		expect(templateSpellings(undefined)).toEqual([]);
 	});
 });
 

@@ -17,7 +17,7 @@ Rotate one tier at a time, `limited` first when both are due, in a window when a
 1. Generate the new value. Use a random source, never a passphrase:
 
    ```bash
-   openssl rand -hex 32
+   NEW_TOKEN=$(openssl rand -hex 32)
    ```
 
 2. Store it where the service reads its environment, replacing the old value of `MCP_AUTH_TOKEN_LIMITED` (or `MCP_AUTH_TOKEN`). The two values must differ, or the server refuses to start with `MCP_AUTH_TOKEN_LIMITED must differ from MCP_AUTH_TOKEN`.

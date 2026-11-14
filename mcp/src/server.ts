@@ -47,12 +47,15 @@ export interface McpAppOptions {
 	anonymous?: boolean;
 	/** Header a gateway may send with its own request id (correlation only). */
 	upstreamRequestIdHeader?: string;
+	/** Messages per minute for each non-`full` access level; defaults to RESTRICTED_REQUESTS_PER_MINUTE. */
+	restrictedRequestsPerMinute?: number;
 }
 
 const KNOWN_APP_OPTIONS: ReadonlySet<string> = new Set([
 	"tokens",
 	"anonymous",
 	"upstreamRequestIdHeader",
+	"restrictedRequestsPerMinute",
 ]);
 
 interface CallIds {
@@ -64,7 +67,10 @@ interface CallIds {
 class RateLimiter {
 	private windows = new Map<Access, { start: number; count: number }>();
 
-	constructor(private readonly now: () => number = Date.now) {}
+	constructor(
+		private readonly cap: number,
+		private readonly now: () => number = Date.now,
+	) {}
 
 	/** Counts `messages` JSON-RPC messages, so one batch POST cannot carry 100 calls as one. */
 	allow(access: Access, messages: number): boolean {
@@ -75,7 +81,7 @@ class RateLimiter {
 			this.windows.set(access, window);
 		}
 		window.count += messages;
-		return window.count <= RESTRICTED_REQUESTS_PER_MINUTE;
+		return window.count <= this.cap;
 	}
 }
 
@@ -122,7 +128,14 @@ export function createMcpApp(
 	const refusals = new RefusalLog(registry.getToolNames());
 	const flushTimer = setInterval(() => refusals.flush(), RATE_WINDOW_MS);
 	flushTimer.unref();
-	const limiter = new RateLimiter();
+	const cap =
+		options.restrictedRequestsPerMinute ?? RESTRICTED_REQUESTS_PER_MINUTE;
+	if (!Number.isInteger(cap) || cap < 1) {
+		throw new Error(
+			"createMcpApp: restrictedRequestsPerMinute must be a positive integer",
+		);
+	}
+	const limiter = new RateLimiter(cap);
 
 	const app = express();
 	app.use(httpSecurityMiddleware());
@@ -167,7 +180,7 @@ export function createMcpApp(
 				jsonrpc: "2.0",
 				error: {
 					code: JSONRPC_RATE_LIMITED,
-					message: `Rate limit exceeded for this access tier (${RESTRICTED_REQUESTS_PER_MINUTE} messages per minute, batches counted per message); retry later.`,
+					message: `Rate limit exceeded for this access tier (${cap} messages per minute, shared by every client of the tier, batches counted per message); retry later.`,
 				},
 				id: null,
 			});

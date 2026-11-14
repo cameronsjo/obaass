@@ -370,20 +370,27 @@ describe("tools/call per access", () => {
 		},
 	);
 
-	it("anonymous: reads succeed; writes are unknown", async () => {
-		await start({ tokens: {}, anonymous: true });
-		const args = validArgs();
-		for (const name of ANONYMOUS_EXPECTED) {
-			const res = await callTool(name, args[name] ?? {});
-			expect(res.body.result?.isError, `${name}: ${text(res)}`).toBeFalsy();
-		}
-		for (const name of ["create_note", "append_to_note", "backup_show_file"]) {
-			const before = await snapshot();
-			const res = await callTool(name, args[name] ?? {});
-			expect(res.body.error?.message).toBe(`Tool ${name} not found`);
-			expect(await snapshot()).toBe(before);
-		}
-	});
+	it.each<Era>(["modern", "legacy"])(
+		"anonymous: reads succeed; writes are unknown (%s era)",
+		async (era) => {
+			await start({ tokens: {}, anonymous: true });
+			const args = validArgs();
+			for (const name of ANONYMOUS_EXPECTED) {
+				const res = await callTool(name, args[name] ?? {}, undefined, era);
+				expect(res.body.result?.isError, `${name}: ${text(res)}`).toBeFalsy();
+			}
+			for (const name of [
+				"create_note",
+				"append_to_note",
+				"backup_show_file",
+			]) {
+				const before = await snapshot();
+				const res = await callTool(name, args[name] ?? {}, undefined, era);
+				expect(res.body.error?.message).toBe(`Tool ${name} not found`);
+				expect(await snapshot()).toBe(before);
+			}
+		},
+	);
 });
 
 describe("limited path policy", () => {
@@ -572,6 +579,22 @@ describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 		expect(res.body.result?.isError).toBeFalsy();
 	});
 
+	it("protects a dotted template name under its .md file", async () => {
+		await closeMcp();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await writeNote("Templates/daily.v2.md", "# {{date}}");
+		await start(
+			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
+			{ dailyNoteTemplate: "/Templates/daily.v2" },
+		);
+		const res = await callTool(
+			"append_to_note",
+			{ path: "Templates/daily.v2.md", content: "<%* x %>" },
+			LIMITED_TOKEN,
+		);
+		expect(text(res)).toMatch(/protected_path/);
+	});
+
 	it("protects an extensionless template setting under its .md name", async () => {
 		const res = await callTool(
 			"append_to_note",
@@ -757,16 +780,24 @@ describe("/health detail", () => {
 });
 
 describe("rate limit for restricted access", () => {
+	it("defaults the cap to 120 messages per minute", () => {
+		expect(RESTRICTED_REQUESTS_PER_MINUTE).toBe(120);
+	});
+
 	it("answers 429 past the per-minute cap for limited, never for full", async () => {
-		await start({ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } });
+		await start({
+			tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN },
+			restrictedRequestsPerMinute: 3,
+		});
 		vi.spyOn(logger, "warn").mockImplementation(() => {});
 		const statuses: number[] = [];
-		for (let i = 0; i < RESTRICTED_REQUESTS_PER_MINUTE + 1; i++) {
+		for (let i = 0; i < 4; i++) {
 			statuses.push((await rpc("tools/list", {}, LIMITED_TOKEN)).status);
 		}
-		expect(statuses.slice(0, -1).every((s) => s === 200)).toBe(true);
-		expect(statuses.at(-1)).toBe(429);
-		expect((await rpc("tools/list", {}, FULL_TOKEN)).status).toBe(200);
+		expect(statuses).toEqual([200, 200, 200, 429]);
+		for (let i = 0; i < 5; i++) {
+			expect((await rpc("tools/list", {}, FULL_TOKEN)).status).toBe(200);
+		}
 	});
 
 	it("counts every message in a batch toward the cap", async () => {
@@ -796,6 +827,36 @@ describe("rate limit for restricted access", () => {
 		expect(callsAfterFirst).toBeGreaterThanOrEqual(100);
 		expect((await post(batch(30, 100))).status).toBe(429);
 		expect(read.mock.calls.length).toBe(callsAfterFirst);
+	});
+});
+
+describe("refusal audit trail over HTTP", () => {
+	it("logs one warn line per refusal kind, with the server-assigned request id", async () => {
+		await start({
+			tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN },
+			restrictedRequestsPerMinute: 3,
+		});
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		await callTool("delete_note", { path: "note.md" }, LIMITED_TOKEN);
+		await callTool("read_note", { path: ".private/n.md" }, LIMITED_TOKEN);
+		await rpc("tools/list", {}, LIMITED_TOKEN);
+		await rpc("tools/list", {}, LIMITED_TOKEN);
+		const lines = warn.mock.calls
+			.filter((c) => c[0] === "Refused MCP request outside its access tier")
+			.map((c) => c[1] as Record<string, unknown>);
+		const byKind = Object.fromEntries(lines.map((l) => [l.refusalKind, l]));
+		expect(byKind.out_of_tier).toMatchObject({
+			tier: "limited",
+			tool: "delete_note",
+			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+		});
+		expect(byKind.dot_segment).toMatchObject({
+			tier: "limited",
+			tool: "read_note",
+			requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+		});
+		expect(byKind.rate_limited).toMatchObject({ tier: "limited", tool: "all" });
+		expect(lines).toHaveLength(3);
 	});
 });
 

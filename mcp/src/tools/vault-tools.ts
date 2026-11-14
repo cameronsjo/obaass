@@ -1,4 +1,3 @@
-import { extname } from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Config } from "../config.js";
@@ -23,6 +22,18 @@ export const WRITTEN_META_KEY = "obaass/written";
 
 function writtenResult(text: string, path: string): CallToolResult {
 	return { ...textResult(text), _meta: { [WRITTEN_META_KEY]: path } };
+}
+
+/**
+ * The vault-relative paths a configured daily-note template may name. Obsidian
+ * stores the setting without `.md` (and a name may contain dots, such as
+ * `daily.v2`), and a leading `/` means the vault root, so both spellings are
+ * covered.
+ */
+export function templateSpellings(template: string | undefined): string[] {
+	if (!template) return [];
+	const rel = template.replace(/^\/+/, "");
+	return rel.toLowerCase().endsWith(".md") ? [rel] : [rel, `${rel}.md`];
 }
 
 /** Longest search term, tag, property, or heading accepted from a caller. */
@@ -102,12 +113,8 @@ export class VaultToolProvider implements ToolProvider {
 		private vault: VaultService,
 		private config: Config,
 	) {
-		// Obsidian stores the template path without `.md`; protect both spellings.
-		const template = config.dailyNoteTemplate;
 		this.restrictedVault = vault.withPolicy({
-			protectedPaths: template
-				? [template, extname(template) ? template : `${template}.md`]
-				: [],
+			protectedPaths: templateSpellings(config.dailyNoteTemplate),
 			writeDirs: config.limitedWriteDirs,
 		});
 	}
@@ -609,11 +616,19 @@ export class VaultToolProvider implements ToolProvider {
 				}
 
 				let content: string;
-				if (
-					this.config.dailyNoteTemplate &&
-					(await this.vault.exists(this.config.dailyNoteTemplate))
-				) {
-					content = await this.vault.readFile(this.config.dailyNoteTemplate);
+				// Operator-configured, so read through the unrestricted service; try the
+				// setting as written, then with `.md` (Obsidian omits the extension).
+				let templatePath: string | undefined;
+				for (const candidate of templateSpellings(
+					this.config.dailyNoteTemplate,
+				)) {
+					if (await this.vault.exists(candidate)) {
+						templatePath = candidate;
+						break;
+					}
+				}
+				if (templatePath) {
+					content = await this.vault.readFile(templatePath);
 					content = content.replace(/\{\{date\}\}/g, targetDate);
 					content = content.replace(/\{\{title\}\}/g, targetDate);
 				} else {
