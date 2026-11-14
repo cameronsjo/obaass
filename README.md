@@ -218,6 +218,8 @@ The server enforces the tier itself, so a rule mistake at a gateway in front of 
 | `backup_*` (all six) | yes | no | no |
 | `semantic_search`, `backlinks`, `graph_neighbors`, `run_dataview_query` | yes | no | no |
 
+No tier, `full` included, may write a hidden path: any create, append, overwrite, frontmatter change, delete, or rename touching a path segment that starts with `.` (`.git/`, `.obsidian/`, `.trash/`, dotfiles) is refused, checked on the requested path and on where a symlink resolves. `.git/config` and `.obsidian/plugins/*` hold settings that run code. `full` can still read them, and `backup_restore` can still restore a file from git history. A `rename` that rewrites links leaves notes under hidden folders untouched.
+
 `limited` and `anonymous` also follow a path policy:
 
 - No path segment may start with `.` (`.obsidian/`, `.git/`, `.trash/`, dotfiles), on the requested path or on where a symlink resolves. Dot entries are hidden from listings and searches.

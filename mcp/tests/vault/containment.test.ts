@@ -145,9 +145,12 @@ describe("containment: lexical escapes", () => {
 		expect(await vault.exists("real.md/x.md")).toBe(false);
 	});
 
-	it("treats a name that merely starts with dots as inside the vault", async () => {
-		await vault.writeFile("..notes.md", "ok");
+	it("treats a name that merely starts with dots as inside the vault, and refuses writing it", async () => {
+		await writeFile(join(vaultPath, "..notes.md"), "ok");
 		expect(await vault.readFile("..notes.md")).toBe("ok");
+		await expect(vault.writeFile("..notes.md", "x")).rejects.toThrow(
+			/dot_segment/,
+		);
 	});
 });
 

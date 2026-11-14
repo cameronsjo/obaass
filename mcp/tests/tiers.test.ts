@@ -538,6 +538,71 @@ describe("limited path policy", () => {
 	});
 });
 
+describe("full tier: no writes to hidden paths", () => {
+	beforeEach(() =>
+		start({ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } }),
+	);
+
+	it("refuses every write route into a hidden folder or file, and changes nothing", async () => {
+		await writeNote(".obsidian/plugins/x/main.js", "plugin();");
+		const gitConfig = await readFile(join(vaultPath, ".git", "config"), "utf8");
+		for (const [name, args] of [
+			["create_note", { path: ".obsidian/plugins/x/new.md", content: "x" }],
+			[
+				"create_note",
+				{
+					path: ".obsidian/plugins/x/main.js",
+					content: "evil();",
+					overwrite: true,
+				},
+			],
+			["append_to_note", { path: ".hidden.md", content: "x" }],
+			["append_to_note", { path: "notes/gitlink.md", content: "[core]" }],
+			["set_frontmatter", { path: ".private/n.md", properties: { a: 1 } }],
+			["delete_note", { path: ".hidden.md" }],
+			[
+				"rename",
+				{ oldPath: "note.md", newPath: ".obsidian/plugins/x/main.md" },
+			],
+			["rename", { oldPath: ".private/n.md", newPath: "moved.md" }],
+		] as const) {
+			const before = await snapshot();
+			const res = await callTool(name, args, FULL_TOKEN);
+			expect(res.body.result?.isError, `${name} ${JSON.stringify(args)}`).toBe(
+				true,
+			);
+			expect(text(res)).toMatch(/dot_segment/);
+			expect(await snapshot()).toBe(before);
+		}
+		expect(await readFile(join(vaultPath, ".git", "config"), "utf8")).toBe(
+			gitConfig,
+		);
+		expect(
+			await readFile(join(vaultPath, ".obsidian/plugins/x/main.js"), "utf8"),
+		).toBe("plugin();");
+	});
+
+	it("still reads hidden paths, and a rename skips links inside hidden notes", async () => {
+		expect(
+			text(await callTool("read_note", { path: ".private/n.md" }, FULL_TOKEN)),
+		).toContain("SECRET");
+		await writeNote(".private/links.md", "see [[ren]]");
+		await writeNote("visible.md", "see [[ren]]");
+		const res = await callTool(
+			"rename",
+			{ oldPath: "ren.md", newPath: "ren3.md" },
+			FULL_TOKEN,
+		);
+		expect(res.body.result?.isError, text(res)).toBeFalsy();
+		expect(await readFile(join(vaultPath, "visible.md"), "utf8")).toBe(
+			"see [[ren3]]",
+		);
+		expect(await readFile(join(vaultPath, ".private/links.md"), "utf8")).toBe(
+			"see [[ren]]",
+		);
+	});
+});
+
 describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 	beforeEach(() =>
 		start(

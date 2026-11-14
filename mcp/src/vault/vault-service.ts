@@ -105,6 +105,13 @@ const INSTRUCTION_FILE =
 
 type Intent = "read" | "write";
 
+/** True when any segment of a vault-relative path starts with `.`. */
+function hasDotSegment(rel: string): boolean {
+	return (
+		rel !== "" && rel.split(sep).some((segment) => segment.startsWith("."))
+	);
+}
+
 function policyRefusal(kind: AccessRefusalKind): AccessRefusal {
 	return new AccessRefusal(
 		`Path policy refused (${kind}): not permitted for this access tier.`,
@@ -153,11 +160,18 @@ export class VaultService {
 	 * dot folder or an instruction file under an innocent name.
 	 */
 	private checkPolicy(rel: string, intent: Intent): void {
-		if (!this.policy) return;
-		const segments = rel === "" ? [] : rel.split(sep);
-		if (segments.some((segment) => segment.startsWith("."))) {
-			throw policyRefusal("dot_segment");
+		const hidden = hasDotSegment(rel);
+		// Every tier, `full` included: no write may land in a hidden folder or
+		// file. `.git/config` and `.obsidian/plugins/*` hold settings that run
+		// code (in the backup container, or on every synced device).
+		if (hidden && intent === "write") {
+			throw new AccessRefusal(
+				"Path policy refused (dot_segment): writes to hidden (dot) folders and files are not permitted.",
+				"dot_segment",
+			);
 		}
+		if (!this.policy) return;
+		if (hidden) throw policyRefusal("dot_segment");
 		if (intent === "read") return;
 		if (extname(rel).toLowerCase() !== ".md") throw policyRefusal("non_md");
 		if (INSTRUCTION_FILE.test(basename(rel))) {
@@ -268,7 +282,7 @@ export class VaultService {
 			}
 			current = target;
 		}
-		if (this.policy) {
+		if (this.policy || intent === "write") {
 			const realTarget = join(current, ...parts.slice(walked));
 			this.checkPolicy(relative(realRoot, realTarget), intent);
 		}
@@ -587,6 +601,9 @@ export class VaultService {
 		let updatedCount = 0;
 
 		for (const file of files) {
+			// Notes under a hidden folder are not writable by any tier; leave their
+			// links as they are rather than failing the rename halfway.
+			if (hasDotSegment(file.path)) continue;
 			const content = await this.readFile(file.path);
 			const updated = rewriteWikilinks(content, oldPath, newPath);
 			if (updated !== content) {

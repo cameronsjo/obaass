@@ -356,6 +356,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 ## Deviations
 
+- **2026-11-14 — Contract change, decided by Cameron in session: `full` loses write access to hidden paths.** The plan kept `full` able to write `.git/` and `.obsidian/` so existing consumers would keep working. That left the full token able to plant a command in `.git/config` or code in a plugin file. Cameron chose to remediate. Every tier now refuses writes, deletes, and renames on a path with a dot segment, on the requested and the resolved path. Reads and `backup_restore` are unchanged. `rename`'s link rewrite skips hidden notes. This narrows `full`'s behavior, which the Global Constraints had kept unchanged; it is the one intended exception. A staged break turned the new test red.
+
 - **2026-11-14 — PR review round 1.**
   - The refusal trail gets an HTTP-level test, which goes red when the `refusals.record` calls are removed.
   - The rate cap is a `createMcpApp` option, so the test runs at 3 rather than sending 121 requests.
