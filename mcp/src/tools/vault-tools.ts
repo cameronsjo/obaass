@@ -6,6 +6,7 @@ import { escapeRegex } from "../util.js";
 import { updateFrontmatter } from "../vault/frontmatter.js";
 import {
 	AccessRefusal,
+	CallerError,
 	type DirectoryEntry,
 	FileExistsError,
 	type VaultService,
@@ -16,6 +17,16 @@ import type { ToolDefinition, ToolProvider } from "./types.js";
 function textResult(text: string): CallToolResult {
 	return { content: [{ type: "text", text }] };
 }
+
+/** `_meta` key naming the note a write tool actually wrote; the server's audit line reads it. */
+export const WRITTEN_META_KEY = "obaass/written";
+
+function writtenResult(text: string, path: string): CallToolResult {
+	return { ...textResult(text), _meta: { [WRITTEN_META_KEY]: path } };
+}
+
+/** Longest search term, tag, property, or heading accepted from a caller. */
+const MAX_TERM_LENGTH = 1024;
 
 function jsonResult(
 	data: Record<string, unknown>,
@@ -50,7 +61,9 @@ export function insertUnderHeading(
 	// Trimmed, and matched with [ \t] rather than \s: a whitespace-only heading
 	// next to `\s+`/`\s*` backtracks quadratically on a long line of spaces.
 	const title = heading.trim();
-	if (title === "") throw new Error("heading must contain non-whitespace text");
+	if (title === "") {
+		throw new CallerError("heading must contain non-whitespace text");
+	}
 	const offset = bodyStart(note);
 	const body = note.slice(offset);
 	const headingRegex = new RegExp(
@@ -165,10 +178,12 @@ export class VaultToolProvider implements ToolProvider {
 					content: string;
 					overwrite?: boolean;
 				};
-				const exists = () =>
-					textResult(
+				const exists = (): CallToolResult => ({
+					...textResult(
 						`Error: File already exists at '${path}'. Use overwrite: true to replace.`,
-					);
+					),
+					isError: true,
+				});
 				if (overwrite) {
 					if (ctx.access !== "full") {
 						throw new AccessRefusal(
@@ -177,7 +192,7 @@ export class VaultToolProvider implements ToolProvider {
 						);
 					}
 					await vault.writeFile(path, content);
-					return textResult(`Created note at '${path}'.`);
+					return writtenResult(`Created note at '${path}'.`, path);
 				}
 				try {
 					// Exclusive create: the path policy runs first, then O_EXCL refuses
@@ -187,7 +202,7 @@ export class VaultToolProvider implements ToolProvider {
 					if (err instanceof FileExistsError) return exists();
 					throw err;
 				}
-				return textResult(`Created note at '${path}'.`);
+				return writtenResult(`Created note at '${path}'.`, path);
 			},
 		};
 	}
@@ -201,6 +216,7 @@ export class VaultToolProvider implements ToolProvider {
 				content: z.string().describe("Content to append"),
 				heading: z
 					.string()
+					.max(MAX_TERM_LENGTH)
 					.optional()
 					.describe("Append under this heading (if found)"),
 			}),
@@ -219,7 +235,7 @@ export class VaultToolProvider implements ToolProvider {
 					// O_APPEND: no read-modify-write, so a concurrent edit is kept.
 					await vault.appendFile(path, `\n\n${content}`);
 				}
-				return textResult(`Appended to '${path}'.`);
+				return writtenResult(`Appended to '${path}'.`, path);
 			},
 		};
 	}
@@ -279,7 +295,10 @@ export class VaultToolProvider implements ToolProvider {
 				"Example: {query: 'TODO'} for literal text, or {query: '#[a-z]+', regex: true}. " +
 				"Returns up to maxResults matches (default 100, max 1000), each with path and line number.",
 			inputSchema: z.object({
-				query: z.string().describe("Search query (text or regex pattern)"),
+				query: z
+					.string()
+					.max(MAX_TERM_LENGTH)
+					.describe("Search query (text or regex pattern)"),
 				regex: z
 					.boolean()
 					.optional()
@@ -411,7 +430,10 @@ export class VaultToolProvider implements ToolProvider {
 			description:
 				"Find all notes that have a specific tag (in frontmatter or inline).",
 			inputSchema: z.object({
-				tag: z.string().describe("Tag to search for (with or without #)"),
+				tag: z
+					.string()
+					.max(MAX_TERM_LENGTH)
+					.describe("Tag to search for (with or without #)"),
 			}),
 			handler: async (params, ctx) => {
 				const vault = this.vaultFor(ctx.access);
@@ -433,7 +455,10 @@ export class VaultToolProvider implements ToolProvider {
 			description:
 				"Find notes by frontmatter property name and optional value.",
 			inputSchema: z.object({
-				property: z.string().describe("Frontmatter property name"),
+				property: z
+					.string()
+					.max(MAX_TERM_LENGTH)
+					.describe("Frontmatter property name"),
 				value: z
 					.string()
 					.optional()
@@ -571,7 +596,7 @@ export class VaultToolProvider implements ToolProvider {
 				const { date } = params as { date?: string };
 				const targetDate = date ?? new Date().toISOString().slice(0, 10);
 				if (!DAILY_NOTE_DATE.test(targetDate)) {
-					throw new Error(
+					throw new CallerError(
 						`date must be YYYY-MM-DD, got ${targetDate.length} characters`,
 					);
 				}
@@ -604,7 +629,10 @@ export class VaultToolProvider implements ToolProvider {
 					}
 					throw err;
 				}
-				return textResult(`Created daily note at '${path}'.\n\n${content}`);
+				return writtenResult(
+					`Created daily note at '${path}'.\n\n${content}`,
+					path,
+				);
 			},
 		};
 	}

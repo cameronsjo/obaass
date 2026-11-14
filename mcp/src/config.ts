@@ -28,6 +28,12 @@ function parseWriteDirs(value: string | undefined): string[] | undefined {
 			);
 		}
 	}
+	if (dirs.length === 0 && value.trim() !== "") {
+		// A value that names nothing must not silently mean "no restriction".
+		throw new Error(
+			"MCP_LIMITED_WRITE_DIRS is set but names no folder; unset it for vault-wide writes or list folders such as Inbox,Claude/Notes",
+		);
+	}
 	return dirs.length > 0 ? dirs : undefined;
 }
 

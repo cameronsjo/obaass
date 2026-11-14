@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { type Server, request } from "node:http";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { Config } from "../src/config.js";
 import { createHealthHandler } from "../src/health.js";
 import type { BackupClient } from "../src/integrations/backup-client.js";
@@ -598,6 +599,22 @@ describe("restricted error text and write audit", () => {
 		expect(full).toContain("ENOENT");
 	});
 
+	it("records the daily note a restricted daily_note created, and no line for a write that did nothing", async () => {
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+		await callTool("daily_note", { date: "2026-02-01" }, LIMITED_TOKEN);
+		await callTool("daily_note", { date: "2026-02-01" }, LIMITED_TOKEN);
+		const exists = await callTool(
+			"create_note",
+			{ path: "note.md", content: "x" },
+			LIMITED_TOKEN,
+		);
+		expect(exists.body.result?.isError).toBe(true);
+		const applied = info.mock.calls
+			.filter((c) => c[0] === "Restricted write applied")
+			.map((c) => (c[1] as { target?: string }).target);
+		expect(applied).toEqual(["Daily Notes/2026-02-01.md"]);
+	});
+
 	it("records the target of a successful restricted write, not its content", async () => {
 		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
 		await callTool(
@@ -614,6 +631,43 @@ describe("restricted error text and write audit", () => {
 			target: "audit.md",
 		});
 		expect(JSON.stringify(info.mock.calls)).not.toContain("SECRET-BODY");
+	});
+});
+
+describe("restricted error text for errors that are not refusals", () => {
+	it("returns a fixed message, never the raw error text, to a restricted caller", async () => {
+		const registry = new ToolRegistry();
+		registry.register({
+			id: "fixture",
+			name: "fixture",
+			getTools: () => [
+				{
+					name: "read_note",
+					description: "throws",
+					inputSchema: z.object({}),
+					handler: async () => {
+						throw new TypeError("SECRET note text and /abs/vault/path");
+					},
+				},
+			],
+		});
+		const error = vi.spyOn(logger, "error").mockImplementation(() => {});
+		const { app, close } = createMcpApp(registry, "/mcp", {
+			tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN },
+		});
+		closeMcp = close;
+		await new Promise<void>((resolve) => {
+			server = app.listen(0, "127.0.0.1", resolve);
+		});
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("no port");
+		port = address.port;
+		const limited = text(await callTool("read_note", {}, LIMITED_TOKEN));
+		expect(limited).toContain("the call failed (TypeError)");
+		expect(limited).not.toContain("SECRET");
+		expect(JSON.stringify(error.mock.calls)).not.toContain("SECRET");
+		const full = text(await callTool("read_note", {}, FULL_TOKEN));
+		expect(full).toContain("SECRET");
 	});
 });
 

@@ -6,6 +6,9 @@
 - Added: `MCP_LIMITED_WRITE_DIRS`, an optional comma-separated list of vault-relative folders the `limited` tier may write under. Unset keeps writes vault-wide.
 - Added: audit fields. Every dispatch line carries `tier` and a server-assigned `requestId`, plus `upstreamRequestId` from `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) when well formed. Refusals log once per tool and kind per minute with a count. Startup logs a fingerprint per configured token.
 - Changed: `MCP_ALLOW_UNAUTHENTICATED=true` serves an explicit `anonymous` set (the read tools under the `limited` path policy) instead of every tool marked read-only. Backup history, plugin reads, and dot paths are no longer served without a token.
+- Changed: `create_note` onto an existing note (without `overwrite`) now returns `isError: true`; the text is unchanged. Search terms, tags, property names, and headings are capped at 1024 characters.
+- Changed: for `limited` and `anonymous`, an error that is neither a refusal nor a filesystem error returns `the call failed (<name>)` instead of its message, which could carry note text.
+- Fixed: `search_by_property` threw for every tier once any note's frontmatter parsed to a scalar or a list.
 - Changed: `/health` detail requires the `full` token, or the local loopback mode with no token configured.
 - Changed: both image stages pin `node:22.23.5-alpine3.24` instead of the floating `node:22-alpine`.
 - Fixed: a write through a dangling in-vault symlink that pointed outside the vault created the file outside it. Every existing path component is now checked, and dangling links are refused.

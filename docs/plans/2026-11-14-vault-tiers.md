@@ -342,8 +342,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 - [x] Re-run Live-state claims 6 and 7
 - [x] Workflow step summary for tags and digest. `release-handoff.sh <vX.Y.Z>` finds the tag-push run, fails unless it concluded `success`, reads the digest of the semver tag (written only by the tag run), runs `cosign verify` against the digest, and prints `image@sha256:…`. Measured 2026-11-14 against `main` (no `v*` tag exists yet): run `43462666263`, commit `fa03122`, attestation and cosign signature verified, pin printed, exit 0. `v9.9.9` and a malformed ref exit 1. Staged breaks of the commit-match and signature-identity checks each exit 1. The summary step runs only in the `merge` job, so its first run is the merge to `main`
-- [ ] run `cadence-forge:polish`; fold findings
-- [ ] Security review: `cadence-forge:security-reviewer` (Opus), or `/security-review` or an Opus reviewer if that type does not resolve. File set:
+- [x] run `cadence-forge:polish`; fold findings
+- [x] Security review: `cadence-forge:security-reviewer` (Opus), or `/security-review` or an Opus reviewer if that type does not resolve. File set:
   - `mcp/src/{auth,http-security,server,health,index,config}.ts`
   - `mcp/src/tools/{tiers,index,types,vault-tools,backup-tools,plugin-tools}.ts`
   - `mcp/src/vault/vault-service.ts`
@@ -355,6 +355,13 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 ---
 
 ## Deviations
+
+- **2026-11-14 — Attestation pass and its nits.** The fresh Opus security pass at `7671339` found no Critical or Important issue; every prior issue was closed. Its three nits were folded after it, under the orchestrator's favor-action instruction:
+  - Write tools report what they wrote (`_meta` `obaass/written`), so `daily_note` gets an audit target and a no-op create is not logged as applied. "Already exists" is now `isError`.
+  - Restricted callers get a fixed message for errors that carry no code and are not `CallerError`. Search terms, tags, properties, and headings are capped at 1024 characters. `search_by_property` skips scalar frontmatter.
+  - A non-empty `MCP_LIMITED_WRITE_DIRS` that names no folder refuses startup, and the startup line shows the effective allowlist.
+
+  Each fold was proven by a staged break; 462/462. These folds landed after the attestation pass and were not re-reviewed by a separate security seat. The NFC/case-fold lead (case-insensitive filesystems only) is recorded, not built: the deployment is Linux.
 
 - **2026-11-14 — Polish security pass: the ReDoS row was not eliminated by refusing `regex: true`.** The independent Opus review found two more super-linear regexes on caller-written text: the heading match in `append_to_note` (measured 29.5 s at 100 KB with heading `" "`) and the wikilink scan. Both are linear now, a whitespace-only heading is refused, and 100k timing tests pin them. A staged break of each turned its test red. The risk row's "eliminated" was wrong when written.
 - **2026-11-14 — Contract change: optional `MCP_LIMITED_WRITE_DIRS`.** gateway-lane asked for a switch to confine `limited` writes to named folders, defaulting to unset (vault-wide), so either answer to D1 ships without a rebuild. The orchestrator decided to add it, acting on Cameron's instruction for this effort's open items ("favor action over inaction"). Cameron did not decide it directly. D1's default behavior is unchanged. The `write_scope` refusal kind is restored.

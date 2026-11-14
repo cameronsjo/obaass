@@ -20,7 +20,8 @@ import {
 	resolveAccess,
 	toolAllowed,
 } from "./tools/tiers.js";
-import { AccessRefusal } from "./vault/vault-service.js";
+import { WRITTEN_META_KEY } from "./tools/vault-tools.js";
+import { AccessRefusal, CallerError } from "./vault/vault-service.js";
 
 /** JSON-RPC internal-error code (per the spec). */
 const JSONRPC_INTERNAL_ERROR = -32603;
@@ -268,13 +269,13 @@ function createServer(
 					const result = await tool.handler(params as Record<string, unknown>, {
 						access,
 					});
-					if (!tool.readOnly && access !== "full" && !result.isError) {
+					const written = result._meta?.[WRITTEN_META_KEY];
+					if (access !== "full" && typeof written === "string") {
 						// The one place a restricted write's target is recorded, so a misused
 						// credential's writes can be reconstructed. Content is never logged.
-						const p = (params as { path?: unknown }).path;
 						logger.info("Restricted write applied", {
 							...fields,
-							...(typeof p === "string" && { target: p }),
+							target: written,
 						});
 					}
 					return result;
@@ -286,13 +287,22 @@ function createServer(
 					}
 					const message = err instanceof Error ? err.message : String(err);
 					const code = (err as NodeJS.ErrnoException | undefined)?.code;
-					// A filesystem error message embeds the absolute vault path; restricted
-					// callers (and their log lines) get the error code's meaning instead.
-					const restricted = access !== "full" && typeof code === "string";
-					const shown = restricted ? describeFsError(code) : message;
+					// Restricted callers (and their log lines) never see a raw message: a
+					// filesystem error embeds the absolute vault path, and other errors can
+					// embed caller text or note content. Only CallerError text is safe.
+					let shown = message;
+					let logged = message;
+					if (access !== "full" && !(err instanceof CallerError)) {
+						const name = err instanceof Error ? err.name : "Error";
+						shown =
+							typeof code === "string"
+								? describeFsError(code)
+								: `the call failed (${name})`;
+						logged = typeof code === "string" ? code : name;
+					}
 					logger.error(`Tool '${tool.name}' failed`, {
 						...fields,
-						error: restricted ? code : message,
+						error: logged,
 					});
 					return errorResult(tool.name, keys, shown);
 				}

@@ -48,8 +48,15 @@ export class FileExistsError extends Error {
 	readonly code = "EEXIST";
 }
 
+/**
+ * An error whose message carries no caller-supplied value or note text, so it
+ * is safe to return to any tier. Restricted tiers get a fixed message for any
+ * error that is neither this nor a filesystem error.
+ */
+export class CallerError extends Error {}
+
 /** Thrown when a read-modify-write finds the file changed since it was read. */
-export class ConcurrentModificationError extends Error {}
+export class ConcurrentModificationError extends CallerError {}
 
 /** Why a path was refused; carried for the refusal audit log, never the path. */
 export type AccessRefusalKind =
@@ -543,7 +550,16 @@ export class VaultService {
 		for (const file of files) {
 			const content = await this.readFile(file.path);
 			const { frontmatter } = parseNote(content);
-			if (!frontmatter || !(property in frontmatter)) continue;
+			// A frontmatter block can parse to a YAML scalar or sequence; only a
+			// mapping has properties (and `in` throws on a primitive).
+			if (
+				!frontmatter ||
+				typeof frontmatter !== "object" ||
+				Array.isArray(frontmatter) ||
+				!(property in frontmatter)
+			) {
+				continue;
+			}
 
 			const propValue = frontmatter[property];
 			if (value === undefined || String(propValue) === value) {

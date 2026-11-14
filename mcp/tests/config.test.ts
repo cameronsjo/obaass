@@ -216,6 +216,10 @@ describe("loadConfig", () => {
 			}
 			process.env.MCP_LIMITED_WRITE_DIRS = "";
 			expect(loadConfig().limitedWriteDirs).toBeUndefined();
+			for (const empty of [" , ", ",", "/", "./"]) {
+				process.env.MCP_LIMITED_WRITE_DIRS = empty;
+				expect(() => loadConfig(), empty).toThrow(/names no folder/);
+			}
 		});
 
 		it("defaults and validates the upstream request id header", () => {

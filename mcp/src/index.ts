@@ -28,6 +28,7 @@ async function main() {
 		tiers: fingerprints.map((f) => f.tier),
 		tokenFingerprints: fingerprints,
 		anonymous: config.anonymous,
+		limitedWriteDirs: config.limitedWriteDirs ?? "vault-wide",
 	});
 	if (config.accessWarning) logger.warn(config.accessWarning);
 
