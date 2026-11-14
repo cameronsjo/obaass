@@ -340,8 +340,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 **Steps:**
 
-- [ ] Re-run Live-state claims 6 and 7
-- [ ] Workflow step summary for tags and digest. `release-handoff.sh <vX.Y.Z>` finds the tag-push run, fails unless it concluded `success`, reads the digest of the semver tag (written only by the tag run), runs `cosign verify` against the digest, and prints `image@sha256:…`
+- [x] Re-run Live-state claims 6 and 7
+- [x] Workflow step summary for tags and digest. `release-handoff.sh <vX.Y.Z>` finds the tag-push run, fails unless it concluded `success`, reads the digest of the semver tag (written only by the tag run), runs `cosign verify` against the digest, and prints `image@sha256:…`. Measured 2026-11-14 against `main` (no `v*` tag exists yet): run `43462666263`, commit `fa03122`, attestation and cosign signature verified, pin printed, exit 0. `v9.9.9` and a malformed ref exit 1. Staged breaks of the commit-match and signature-identity checks each exit 1. The summary step runs only in the `merge` job, so its first run is the merge to `main`
 - [ ] run `cadence-forge:polish`; fold findings
 - [ ] Security review: `cadence-forge:security-reviewer` (Opus), or `/security-review` or an Opus reviewer if that type does not resolve. File set:
   - `mcp/src/{auth,http-security,server,health,index,config}.ts`
