@@ -186,22 +186,49 @@ The Host check is not a credential: any non-browser client can send
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_HTTP_HOST` | `127.0.0.1` | Bind address. Anything other than a loopback IP (`127.0.0.0/8`, `::1`) needs `MCP_AUTH_TOKEN`; the name `localhost` counts as non-loopback. |
-| `MCP_AUTH_TOKEN` | unset | Bearer token required on the MCP path. At least 32 characters. When set, `/health` gives callers without it status only. |
-| `MCP_ALLOW_UNAUTHENTICATED` | `false` | Start on a non-loopback bind without a token, serving read-only tools only. |
+| `MCP_AUTH_TOKEN` | unset | Bearer token for the `full` tier: every tool. At least 32 characters. Only this token gets detailed `/health`. |
+| `MCP_AUTH_TOKEN_LIMITED` | unset | Bearer token for the `limited` tier (below). Same rules; it must differ from `MCP_AUTH_TOKEN`. Either token alone satisfies the start check. |
+| `MCP_ALLOW_UNAUTHENTICATED` | `false` | Start on a non-loopback bind without a token, serving the `anonymous` read tools only. |
+| `MCP_UPSTREAM_REQUEST_ID_HEADER` | `x-request-id` | Header a gateway may send with its own request id. A value matching `[A-Za-z0-9._-]{1,64}` is recorded on audit lines as `upstreamRequestId`, for correlation only; it never selects a tier. |
+
+Generate every token with `openssl rand -hex 32` or an equivalent random source. A passphrase is not acceptable.
 
 | Bind | Token | Result |
 |------|-------|--------|
-| loopback | unset | Starts; no credential (local clients only) |
-| any | set | Starts; every MCP request needs `Authorization: Bearer <token>` |
+| loopback | unset | Starts; no credential (local clients only); every tool |
+| any | either set | Starts; every MCP request needs `Authorization: Bearer <token>`, and the token picks the tier |
 | non-loopback, or loopback with `MCP_ALLOWED_HOSTS` set | unset | Refuses to start |
-| same | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts read-only; write tools are not registered; `/health` gives status only |
+| same | unset, `MCP_ALLOW_UNAUTHENTICATED=true` | Starts with the `anonymous` tools only; `/health` gives status only |
 
 A non-empty `MCP_ALLOWED_HOSTS` means a proxy or remote name is expected to
-reach the server, so it needs a token even on a loopback bind. Read-only mode
-also withholds `run_dataview_query`, since the plugin may run DataviewJS.
+reach the server, so it needs a token even on a loopback bind.
+
+#### Access tiers
+
+The server enforces the tier itself, so a rule mistake at a gateway in front of it cannot widen a credential. A tool outside the caller's tier is absent from `tools/list`, and a `tools/call` for it gets `Tool <name> not found`.
+
+| Tool | `full` | `limited` | `anonymous` |
+|------|:------:|:---------:|:-----------:|
+| `read_note`, `vault_structure`, `file_metadata`, `vault_tags`, `search_by_tag`, `search_by_property`, `recent_files`, `get_instructions` | yes | yes | yes |
+| `search_content` | yes | literal text only | literal text only |
+| `create_note` | yes | new notes only; `overwrite: true` refused | no |
+| `append_to_note`, `daily_note` | yes | yes | no |
+| `set_frontmatter`, `delete_note`, `delete`, `rename` | yes | no | no |
+| `backup_*` (all six) | yes | no | no |
+| `semantic_search`, `backlinks`, `graph_neighbors`, `run_dataview_query` | yes | no | no |
+
+`limited` and `anonymous` also follow a path policy:
+
+- No path segment may start with `.` (`.obsidian/`, `.git/`, `.trash/`, dotfiles), on the requested path or on where a symlink resolves. Dot entries are hidden from listings and searches.
+- `limited` writes go only to `.md` files, only by creating a new note or appending, and never to `CLAUDE.md`, `AGENTS.md`, or `GEMINI.md` at any depth, or to the configured `DAILY_NOTE_TEMPLATE`.
+- Each is capped at 120 requests per minute (HTTP 429 past that).
+
+`limited` can create and append anywhere else in the vault. A note it writes can carry code that Obsidian runs on a device. That happens when Dataview's "Enable JavaScript Queries" is on, when Templater's "Trigger Templater on new file creation" is on, or when someone applies a template it appended to. Turn those settings off, or accept that risk for the client holding the `limited` token.
+
+Every request gets a server-assigned `requestId` on its audit lines. Refusals log at `warn` once per tool and refusal kind per minute, with a count, and never include the refused path. At startup the server logs a short fingerprint of each configured token, so a rotation can be confirmed without printing the token. Rotation and rollback: [docs/runbooks/rotate-mcp-tokens.md](docs/runbooks/rotate-mcp-tokens.md).
 
 The container image binds `0.0.0.0` so that its published port works. It
-therefore needs `MCP_AUTH_TOKEN` at run time. Generate one with `openssl rand -hex 32`, keep it
+therefore needs `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKEN_LIMITED` at run time. Generate one with `openssl rand -hex 32`, keep it
 in an untracked `.env` or a secret store, and give the same value to your MCP
 client as an `Authorization: Bearer` header. Publish the port on `127.0.0.1` or
 your tailnet IP, not all interfaces:

@@ -1,6 +1,6 @@
 ---
 status: in-flight
-next: "Task 2 tiers → Task 3 deps → Task 4 docs → Task 5 review, ready"
+next: "Task 5: polish → Opus security review → gateway-lane agreement on CAM-720 → CI green → ready flip → Cameron go for merge and v0.2.0"
 branch: cam-723-vault-tiers-make-the-vault-mcp-server-enforce-an
 pr: cameronsjo/obaass#35
 updated: 2026-11-14
@@ -315,17 +315,17 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 **Steps:**
 
-- [ ] README: `MCP_AUTH_TOKEN_LIMITED`, the mode table, the placement table, the Obsidian JS residual, and that tokens MUST come from `openssl rand -hex 32` or equivalent (no passphrases)
-- [ ] Runbook covers:
+- [x] README: `MCP_AUTH_TOKEN_LIMITED`, the mode table, the placement table, the Obsidian JS residual, and that tokens MUST come from `openssl rand -hex 32` or equivalent (no passphrases)
+- [x] Runbook covers:
   - generating and storing a token
   - rotation order (`limited` first, in a window; a rotation is a brief 401 window for that client)
   - the post-restart check
   - rollback to a pre-tier image, including the limited-only case, where the old image refuses to start without `MCP_AUTH_TOKEN`
-- [ ] `## Unreleased` entries, kept alongside the existing ones:
+- [x] `## Unreleased` entries, kept alongside the existing ones:
   - Added: tiers, `anonymous`
   - Changed: the opt-out mode's tool set, the Node pin
   - Fixed: the dangling-symlink escape, create replacing, `daily_note` traversal, pathspec globs, lost appends, frontmatter heading matches
-- [ ] Commit: `docs(mcp): document access tiers and token rotation`
+- [x] Commit: `docs(mcp): document access tiers and token rotation`
 
 ### Task 5 — Review, ready, release hand-off
 

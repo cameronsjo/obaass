@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added: access tiers bound to the bearer token. `MCP_AUTH_TOKEN` keeps the `full` tier (every tool). The new `MCP_AUTH_TOKEN_LIMITED` selects `limited`: the read tools, literal-text search, `create_note` for new notes only, `append_to_note`, and `daily_note`. A tool outside the caller's tier is not registered, so it is absent from `tools/list` and refused on `tools/call`. `limited` cannot use dot paths, and it writes only `.md` files, never `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` or the daily-note template. It is capped at 120 requests per minute. See the README's "Access tiers" section and `docs/runbooks/rotate-mcp-tokens.md`.
+- Added: audit fields. Every dispatch line carries `tier` and a server-assigned `requestId`, plus `upstreamRequestId` from `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) when well formed. Refusals log once per tool and kind per minute with a count. Startup logs a fingerprint per configured token.
+- Changed: `MCP_ALLOW_UNAUTHENTICATED=true` serves an explicit `anonymous` set (the read tools under the `limited` path policy) instead of every tool marked read-only. Backup history, plugin reads, and dot paths are no longer served without a token.
+- Changed: `/health` detail requires the `full` token, or the local loopback mode with no token configured.
+- Changed: both image stages pin `node:22.23.5-alpine3.24` instead of the floating `node:22-alpine`.
+- Fixed: a write through a dangling in-vault symlink that pointed outside the vault created the file outside it. Every existing path component is now checked, and dangling links are refused.
+- Fixed: `create_note` without `overwrite` and `daily_note` could replace a note created between their existence check and the write. Creates are now exclusive.
+- Fixed: `daily_note` accepted any `date` string, so `../x` wrote outside the daily folder. `date` must be `YYYY-MM-DD`.
+- Fixed: `backup_restore` with `path: "*"` restored every file in the vault. Git now treats every path argument literally.
+- Fixed: `append_to_note` rewrote the whole note from a stale read, losing a concurrent edit. A tail append now uses `O_APPEND`, and a heading insert refuses when the note changed. A heading-shaped line inside frontmatter is no longer an insert target.
+
 - Changed: the image workflow pins every third-party action to a full commit
   SHA, with the release version in a trailing comment, so a re-pointed upstream
   tag cannot change what runs in the job that pushes, signs, and attests the
