@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Config } from "../config.js";
@@ -46,17 +47,21 @@ export function insertUnderHeading(
 	heading: string,
 	content: string,
 ): string {
+	// Trimmed, and matched with [ \t] rather than \s: a whitespace-only heading
+	// next to `\s+`/`\s*` backtracks quadratically on a long line of spaces.
+	const title = heading.trim();
+	if (title === "") throw new Error("heading must contain non-whitespace text");
 	const offset = bodyStart(note);
 	const body = note.slice(offset);
 	const headingRegex = new RegExp(
-		`^(#{1,6})\\s+${escapeRegex(heading)}\\s*$`,
+		`^(#{1,6})[ \\t]+${escapeRegex(title)}[ \\t]*$`,
 		"m",
 	);
 	const match = headingRegex.exec(body);
-	if (!match) return `${note}\n\n## ${heading}\n\n${content}`;
+	if (!match) return `${note}\n\n## ${title}\n\n${content}`;
 	const level = match[1].length;
 	const sectionStart = offset + match.index + match[0].length;
-	const nextHeading = new RegExp(`^#{1,${level}}\\s+`, "m").exec(
+	const nextHeading = new RegExp(`^#{1,${level}}[ \\t]`, "m").exec(
 		note.slice(sectionStart),
 	);
 	const insertPos = nextHeading
@@ -84,10 +89,13 @@ export class VaultToolProvider implements ToolProvider {
 		private vault: VaultService,
 		private config: Config,
 	) {
+		// Obsidian stores the template path without `.md`; protect both spellings.
+		const template = config.dailyNoteTemplate;
 		this.restrictedVault = vault.withPolicy({
-			protectedPaths: config.dailyNoteTemplate
-				? [config.dailyNoteTemplate]
+			protectedPaths: template
+				? [template, extname(template) ? template : `${template}.md`]
 				: [],
+			writeDirs: config.limitedWriteDirs,
 		});
 	}
 

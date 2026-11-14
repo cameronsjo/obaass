@@ -356,6 +356,15 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 ## Deviations
 
+- **2026-11-14 — Polish security pass: the ReDoS row was not eliminated by refusing `regex: true`.** The independent Opus review found two more super-linear regexes on caller-written text: the heading match in `append_to_note` (measured 29.5 s at 100 KB with heading `" "`) and the wikilink scan. Both are linear now, a whitespace-only heading is refused, and 100k timing tests pin them. A staged break of each turned its test red. The risk row's "eliminated" was wrong when written.
+- **2026-11-14 — Contract change: optional `MCP_LIMITED_WRITE_DIRS`.** gateway-lane asked for a switch to confine `limited` writes to named folders, defaulting to unset (vault-wide), so either answer to D1 ships without a rebuild. The orchestrator decided to add it, acting on Cameron's instruction for this effort's open items ("favor action over inaction"). Cameron did not decide it directly. D1's default behavior is unchanged. The `write_scope` refusal kind is restored.
+- **2026-11-14 — Polish security nits folded:**
+  - A restricted caller's filesystem errors name the error code's meaning, not the absolute path.
+  - Each successful restricted write logs its target note.
+  - An extensionless `DAILY_NOTE_TEMPLATE` is protected under its `.md` name.
+  - The instruction-file match adds `AGENT`, `QWEN`, `CRUSH`, and `CONVENTIONS`.
+  - The `@hono/node-server` advisory stays open as recorded (unreachable).
+
 - **2026-11-14 — Polish: refusal kinds and messages differ from the Logging section.** The kind set dropped `write_scope` (D1 removed the folder allowlist) and gained `protected_path`, `write_operation`, and `rate_limited`. Refusal messages name the rule but not the tier, because `VaultService` does not know the caller's tier; the audit line carries `tier`. The two new containment messages no longer include the path. The older traversal messages still echo the caller's own path back to the caller, and none is logged.
 - **2026-11-14 — Polish: `appendFile` opens with `O_WRONLY|O_APPEND` and no `O_CREAT`**, so an append to a missing note fails as before instead of creating it. This is an improvement over the plan's `flag: "a"`.
 - **2026-11-14 — Polish: the rate cap counts JSON-RPC messages, not HTTP requests.** Review found that one legacy batch POST carried up to 100 calls past a per-request cap.

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added: access tiers bound to the bearer token. `MCP_AUTH_TOKEN` keeps the `full` tier (every tool). The new `MCP_AUTH_TOKEN_LIMITED` selects `limited`: the read tools, literal-text search, `create_note` for new notes only, `append_to_note`, and `daily_note`. A tool outside the caller's tier is not registered, so it is absent from `tools/list` and refused on `tools/call`. `limited` cannot use dot paths, and it writes only `.md` files, never an agent instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, or variants such as `CLAUDE.local.md`) or the daily-note template. It is capped at 120 JSON-RPC messages per minute, with every message in a batch counted. See the README's "Access tiers" section and `docs/runbooks/rotate-mcp-tokens.md`.
+- Added: `MCP_LIMITED_WRITE_DIRS`, an optional comma-separated list of vault-relative folders the `limited` tier may write under. Unset keeps writes vault-wide.
 - Added: audit fields. Every dispatch line carries `tier` and a server-assigned `requestId`, plus `upstreamRequestId` from `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) when well formed. Refusals log once per tool and kind per minute with a count. Startup logs a fingerprint per configured token.
 - Changed: `MCP_ALLOW_UNAUTHENTICATED=true` serves an explicit `anonymous` set (the read tools under the `limited` path policy) instead of every tool marked read-only. Backup history, plugin reads, and dot paths are no longer served without a token.
 - Changed: `/health` detail requires the `full` token, or the local loopback mode with no token configured.
@@ -11,6 +12,7 @@
 - Fixed: `create_note` without `overwrite` and `daily_note` could replace a note created between their existence check and the write. Creates are now exclusive.
 - Fixed: `daily_note` accepted any `date` string, so `../x` wrote outside the daily folder. `date` must be `YYYY-MM-DD`.
 - Fixed: `backup_restore` with `path: "*"` restored every file in the vault. Git now treats every path argument literally.
+- Fixed: two regular expressions a `limited` caller could feed its own text backtracked quadratically, stalling the server for every tier. One was the heading match in `append_to_note` (a whitespace-only `heading` on a long line of spaces: about 30 s at 100 KB). The other was the wikilink scan behind `file_metadata` and `rename` (a note of `[` characters). Both are now linear, and a whitespace-only `heading` is refused.
 - Fixed: `append_to_note` rewrote the whole note from a stale read, losing a concurrent edit. A tail append now uses `O_APPEND`, and a heading insert refuses when the note changed. A heading-shaped line inside frontmatter is no longer an insert target.
 
 - Changed: the image workflow pins every third-party action to a full commit

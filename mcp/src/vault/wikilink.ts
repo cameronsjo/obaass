@@ -16,7 +16,9 @@ export interface Wikilink {
 	heading?: string;
 }
 
-const WIKILINK_REGEX = /\[\[([^\]]+?)\]\]/g;
+// `[` is excluded from the target so each match attempt stops at the next
+// bracket: with `[^\]]` a note of N `[` characters costs O(N²) to scan.
+const WIKILINK_REGEX = /\[\[([^[\]]+?)\]\]/g;
 
 /** Extract all wikilinks from markdown content. */
 export function extractWikilinks(content: string): Wikilink[] {

@@ -134,8 +134,11 @@ function makeConfig(extra: Partial<Config> = {}): Config {
 	} as Config;
 }
 
-async function start(options: McpAppOptions): Promise<void> {
-	const config = makeConfig();
+async function start(
+	options: McpAppOptions,
+	configExtra: Partial<Config> = {},
+): Promise<void> {
+	const config = makeConfig(configExtra);
 	const vault = new VaultService(vaultPath);
 	const registry = new ToolRegistry();
 	registry.register(new VaultToolProvider(vault, config));
@@ -437,6 +440,7 @@ describe("limited path policy", () => {
 			content: "x",
 		});
 		await refused("create_note", { path: "AGENTS.md", content: "x" });
+		await refused("create_note", { path: "notes/QWEN.md", content: "x" });
 		await refused("append_to_note", { path: "AGENTS.md", content: "x" });
 		await refused("append_to_note", {
 			path: "Templates/daily.md",
@@ -523,6 +527,93 @@ describe("limited path policy", () => {
 		);
 		expect(lines.length).toBeGreaterThan(0);
 		expect(lines.join("\n")).not.toMatch(/\.private|sub\/CLAUDE/);
+	});
+});
+
+describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
+	beforeEach(() =>
+		start(
+			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
+			{ limitedWriteDirs: ["Inbox"], dailyNoteTemplate: "Templates/daily" },
+		),
+	);
+
+	it("allows writes only under the listed folders", async () => {
+		const ok = await callTool(
+			"create_note",
+			{ path: "Inbox/a.md", content: "x" },
+			LIMITED_TOKEN,
+		);
+		expect(ok.body.result?.isError, text(ok)).toBeFalsy();
+		for (const [name, args] of [
+			["create_note", { path: "b.md", content: "x" }],
+			["create_note", { path: "Inboxer/c.md", content: "x" }],
+			["create_note", { path: "inboxlink/d.md", content: "x" }],
+			["append_to_note", { path: "note.md", content: "x" }],
+			["daily_note", { date: "2026-01-16" }],
+		] as const) {
+			const before = await snapshot();
+			const res = await callTool(name, args, LIMITED_TOKEN);
+			expect(res.body.result?.isError, `${name} ${JSON.stringify(args)}`).toBe(
+				true,
+			);
+			expect(text(res)).toMatch(/write_scope/);
+			expect(await snapshot()).toBe(before);
+		}
+	});
+
+	it("does not restrict the full tier", async () => {
+		const res = await callTool(
+			"create_note",
+			{ path: "b.md", content: "x" },
+			FULL_TOKEN,
+		);
+		expect(res.body.result?.isError).toBeFalsy();
+	});
+
+	it("protects an extensionless template setting under its .md name", async () => {
+		const res = await callTool(
+			"append_to_note",
+			{ path: "Templates/daily.md", content: "x" },
+			LIMITED_TOKEN,
+		);
+		expect(text(res)).toMatch(/protected_path/);
+	});
+});
+
+describe("restricted error text and write audit", () => {
+	beforeEach(() =>
+		start({ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } }),
+	);
+
+	it("never returns the absolute vault path to a restricted caller", async () => {
+		const limited = text(
+			await callTool("read_note", { path: "missing.md" }, LIMITED_TOKEN),
+		);
+		expect(limited).toMatch(/not found/);
+		expect(limited).not.toContain(vaultPath);
+		const full = text(
+			await callTool("read_note", { path: "missing.md" }, FULL_TOKEN),
+		);
+		expect(full).toContain("ENOENT");
+	});
+
+	it("records the target of a successful restricted write, not its content", async () => {
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+		await callTool(
+			"create_note",
+			{ path: "audit.md", content: "SECRET-BODY" },
+			LIMITED_TOKEN,
+		);
+		const applied = info.mock.calls.find(
+			(c) => c[0] === "Restricted write applied",
+		);
+		expect(applied?.[1]).toMatchObject({
+			tool: "create_note",
+			tier: "limited",
+			target: "audit.md",
+		});
+		expect(JSON.stringify(info.mock.calls)).not.toContain("SECRET-BODY");
 	});
 });
 

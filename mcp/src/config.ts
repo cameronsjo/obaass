@@ -7,6 +7,30 @@ import {
 } from "./auth.js";
 import type { TierTokens } from "./tools/tiers.js";
 
+/**
+ * MCP_LIMITED_WRITE_DIRS: comma-separated vault-relative folders the limited
+ * tier may write under. Unset or empty means no folder restriction.
+ */
+function parseWriteDirs(value: string | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	const dirs = value
+		.split(",")
+		.map((d) => d.trim().replace(/^\.\//, "").replace(/\/+$/, ""))
+		.filter((d) => d !== "");
+	for (const dir of dirs) {
+		const segments = dir.split("/");
+		if (
+			dir.startsWith("/") ||
+			segments.some((s) => s === "" || s === ".." || s.startsWith("."))
+		) {
+			throw new Error(
+				`MCP_LIMITED_WRITE_DIRS entries must be vault-relative folders without "..", empty, or dot segments; got an invalid entry of ${dir.length} characters`,
+			);
+		}
+	}
+	return dirs.length > 0 ? dirs : undefined;
+}
+
 function tokenSchema(variable: string) {
 	return z
 		.string()
@@ -38,6 +62,10 @@ const configSchema = z.object({
 	pluginMcpUrl: z.string().url().optional(),
 	dailyNoteFolder: z.string().optional(),
 	dailyNoteTemplate: z.string().optional(),
+	limitedWriteDirs: z
+		.string()
+		.optional()
+		.transform((value) => parseWriteDirs(value)),
 	authToken: tokenSchema("MCP_AUTH_TOKEN"),
 	limitedAuthToken: tokenSchema("MCP_AUTH_TOKEN_LIMITED"),
 	upstreamRequestIdHeader: z
@@ -74,6 +102,7 @@ export function loadConfig(): Config {
 		pluginMcpUrl: process.env.PLUGIN_MCP_URL || undefined,
 		dailyNoteFolder: process.env.DAILY_NOTE_FOLDER || undefined,
 		dailyNoteTemplate: process.env.DAILY_NOTE_TEMPLATE || undefined,
+		limitedWriteDirs: process.env.MCP_LIMITED_WRITE_DIRS || undefined,
 		authToken: process.env.MCP_AUTH_TOKEN || undefined,
 		limitedAuthToken: process.env.MCP_AUTH_TOKEN_LIMITED || undefined,
 		upstreamRequestIdHeader:
@@ -95,7 +124,8 @@ export function loadConfig(): Config {
 		);
 	}
 
-	// Refuses to start when write tools would be reachable off loopback unauthenticated.
+	// Refuses to start when tools beyond the anonymous read set would be reachable
+	// off loopback without a token.
 	const access = resolveAccessPolicy({
 		...parsed,
 		hasAllowedHosts: !!process.env.MCP_ALLOWED_HOSTS?.trim(),

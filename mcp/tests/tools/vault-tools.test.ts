@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
 import type { ToolDefinition } from "../../src/tools/types.js";
-import { VaultToolProvider } from "../../src/tools/vault-tools.js";
+import {
+	VaultToolProvider,
+	insertUnderHeading,
+} from "../../src/tools/vault-tools.js";
 import { VaultService } from "../../src/vault/vault-service.js";
 import { cleanupVault, makeTempVault, writeVaultFile } from "../helpers.js";
 
@@ -603,6 +606,28 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		expect(onDisk.startsWith("---\n# status\ntitle: x\n---\n")).toBe(true);
 		expect(onDisk).toBe(
 			"---\n# status\ntitle: x\n---\n\n# status\n\nbody\npublish: true\n",
+		);
+	});
+});
+
+describe("insertUnderHeading cost and input", () => {
+	it("answers a whitespace-only heading on a long whitespace line fast (no O(n²) backtracking)", () => {
+		// `\s+ \s*$` from heading " " backtracked quadratically: ~15 s at 100 KB.
+		const note = `#${" ".repeat(100_000)}x`;
+		const started = performance.now();
+		expect(() => insertUnderHeading(note, " ", "entry")).toThrow(
+			/non-whitespace/,
+		);
+		insertUnderHeading(note, "x", "entry");
+		expect(performance.now() - started).toBeLessThan(250);
+	});
+
+	it("refuses a whitespace-only heading and trims a padded one", () => {
+		expect(() => insertUnderHeading("## Log\n", "  \t ", "x")).toThrow(
+			/non-whitespace/,
+		);
+		expect(insertUnderHeading("## Log\n\nfirst", "  Log  ", "x")).toBe(
+			"## Log\n\nfirst\nx\n",
 		);
 	});
 });

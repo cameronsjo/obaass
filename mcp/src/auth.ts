@@ -39,9 +39,10 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /**
- * Decide how the MCP endpoint is protected. Write tools are never reachable
- * off loopback without a token: an unauthenticated non-loopback bind refuses to
- * start, and the explicit opt-out drops to read-only tools.
+ * Decide how the MCP endpoint is protected. Off loopback, every tool beyond the
+ * anonymous read set needs a token (`MCP_AUTH_TOKEN` or `MCP_AUTH_TOKEN_LIMITED`):
+ * an unauthenticated non-loopback bind refuses to start, and the explicit
+ * opt-out serves only the anonymous read set.
  */
 export function resolveAccessPolicy(input: AccessPolicyInput): AccessPolicy {
 	if (input.authToken || input.limitedAuthToken) {

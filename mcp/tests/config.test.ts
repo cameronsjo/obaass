@@ -24,6 +24,7 @@ describe("loadConfig", () => {
 			"MCP_AUTH_TOKEN",
 			"MCP_AUTH_TOKEN_LIMITED",
 			"MCP_UPSTREAM_REQUEST_ID_HEADER",
+			"MCP_LIMITED_WRITE_DIRS",
 			"MCP_ALLOW_UNAUTHENTICATED",
 			"MCP_ALLOWED_HOSTS",
 		]) {
@@ -154,6 +155,26 @@ describe("loadConfig", () => {
 			expect(loadConfig().limitedAuthToken).toBeUndefined();
 		});
 
+		it("an empty limited token leaves full alone and never opens unauthenticated access", () => {
+			process.env.MCP_HTTP_HOST = "0.0.0.0";
+			process.env.MCP_AUTH_TOKEN_LIMITED = "";
+			expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN/);
+			process.env.MCP_AUTH_TOKEN = "f".repeat(64);
+			const config = loadConfig();
+			expect(config.limitedAuthToken).toBeUndefined();
+			expect(config.authToken).toBe("f".repeat(64));
+			expect(config.anonymous).toBe(false);
+		});
+
+		it.each(["short", " ".repeat(40)])(
+			"a malformed limited token refuses startup even with a valid full token (%j)",
+			(value) => {
+				process.env.MCP_AUTH_TOKEN = "f".repeat(64);
+				process.env.MCP_AUTH_TOKEN_LIMITED = value;
+				expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN_LIMITED/);
+			},
+		);
+
 		it("starts on a non-loopback bind with only the limited token", () => {
 			process.env.MCP_HTTP_HOST = "0.0.0.0";
 			process.env.MCP_AUTH_TOKEN_LIMITED = "q".repeat(64);
@@ -184,6 +205,18 @@ describe("loadConfig", () => {
 				expect(() => loadConfig()).toThrow(/MCP_AUTH_TOKEN_LIMITED/);
 			},
 		);
+
+		it("parses MCP_LIMITED_WRITE_DIRS and refuses unsafe entries", () => {
+			expect(loadConfig().limitedWriteDirs).toBeUndefined();
+			process.env.MCP_LIMITED_WRITE_DIRS = " Inbox/ , ./Claude/Notes ,";
+			expect(loadConfig().limitedWriteDirs).toEqual(["Inbox", "Claude/Notes"]);
+			for (const bad of ["../x", "/abs", "a/../b", ".obsidian", "a//b"]) {
+				process.env.MCP_LIMITED_WRITE_DIRS = bad;
+				expect(() => loadConfig(), bad).toThrow(/MCP_LIMITED_WRITE_DIRS/);
+			}
+			process.env.MCP_LIMITED_WRITE_DIRS = "";
+			expect(loadConfig().limitedWriteDirs).toBeUndefined();
+		});
 
 		it("defaults and validates the upstream request id header", () => {
 			expect(loadConfig().upstreamRequestIdHeader).toBe("x-request-id");

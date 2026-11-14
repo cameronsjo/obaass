@@ -59,6 +59,7 @@ export type AccessRefusalKind =
 	| "non_md"
 	| "instruction_file"
 	| "protected_path"
+	| "write_scope"
 	| "write_operation"
 	| "overwrite"
 	| "regex";
@@ -80,6 +81,11 @@ export class AccessRefusal extends Error {
 export interface PathPolicy {
 	/** Files the tier may never write, such as the configured daily-note template. */
 	protectedPaths: readonly string[];
+	/**
+	 * When set, the only folders the tier may write under (vault-relative,
+	 * exact case). Unset means anywhere the rest of the policy allows.
+	 */
+	writeDirs?: readonly string[] | undefined;
 }
 
 /**
@@ -87,7 +93,8 @@ export interface PathPolicy {
  * `CLAUDE.local.md` and `AGENTS.override.md`; a restricted tier may not write
  * them anywhere.
  */
-const INSTRUCTION_FILE = /^(claude|agents|gemini)(\.[^/]*)?\.md$/i;
+const INSTRUCTION_FILE =
+	/^(claude|agents?|gemini|qwen|crush|conventions)(\.[^/]*)?\.md$/i;
 
 type Intent = "read" | "write";
 
@@ -156,6 +163,10 @@ export class VaultService {
 			)
 		) {
 			throw policyRefusal("protected_path");
+		}
+		const dirs = this.policy.writeDirs;
+		if (dirs && !dirs.some((d) => rel === d || rel.startsWith(d + sep))) {
+			throw policyRefusal("write_scope");
 		}
 	}
 
@@ -262,7 +273,10 @@ export class VaultService {
 		return readFile(await this.resolveSafe(path), "utf-8");
 	}
 
-	/** Write content to a file, creating parent directories as needed. */
+	/**
+	 * Write (create or replace) a file, creating parent directories as needed.
+	 * Refused under a path policy, which allows only create and append.
+	 */
 	async writeFile(path: string, content: string): Promise<void> {
 		this.refuseWriteOperation();
 		const absPath = await this.resolveSafe(path, "write");
@@ -326,13 +340,13 @@ export class VaultService {
 		await writeFile(absPath, updated, "utf-8");
 	}
 
-	/** Delete a file. */
+	/** Delete a file. Refused under a path policy. */
 	async deleteFile(path: string): Promise<void> {
 		this.refuseWriteOperation();
 		await unlink(await this.resolveSafe(path, "write"));
 	}
 
-	/** Rename/move a file. */
+	/** Rename/move a file. Refused under a path policy. */
 	async renameFile(oldPath: string, newPath: string): Promise<void> {
 		this.refuseWriteOperation();
 		const absOld = await this.resolveSafe(oldPath, "write");

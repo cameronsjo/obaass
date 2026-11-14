@@ -32,7 +32,10 @@ const REQUEST_ID_HEADER = "x-obaass-request-id";
 /** Shape a gateway-supplied correlation id must have to be recorded. */
 const UPSTREAM_REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
-/** Requests per minute allowed to each non-`full` access level, across all its clients. */
+/**
+ * JSON-RPC messages per minute allowed to each non-`full` access level, across
+ * all its clients. Every message in a batch counts.
+ */
 export const RESTRICTED_REQUESTS_PER_MINUTE = 120;
 const RATE_WINDOW_MS = 60_000;
 
@@ -208,6 +211,19 @@ function describeInputKeys(input: unknown): string {
 	return ` (args: ${shown.join(", ")}${suffix})`;
 }
 
+const FS_ERROR_TEXT: Readonly<Record<string, string>> = {
+	ENOENT: "note or folder not found",
+	ENOTDIR: "a path component is a file, not a folder",
+	EISDIR: "the path is a folder, not a note",
+	EEXIST: "a note already exists at that path",
+	EACCES: "permission denied",
+	EPERM: "permission denied",
+};
+
+function describeFsError(code: string): string {
+	return FS_ERROR_TEXT[code] ?? `file system error (${code})`;
+}
+
 function errorResult(toolName: string, keys: string, message: string) {
 	return {
 		content: [
@@ -249,9 +265,19 @@ function createServer(
 				if (tool.readOnly) logger.debug("Dispatching read tool", fields);
 				else logger.info("Dispatching write tool", fields);
 				try {
-					return await tool.handler(params as Record<string, unknown>, {
+					const result = await tool.handler(params as Record<string, unknown>, {
 						access,
 					});
+					if (!tool.readOnly && access !== "full" && !result.isError) {
+						// The one place a restricted write's target is recorded, so a misused
+						// credential's writes can be reconstructed. Content is never logged.
+						const p = (params as { path?: unknown }).path;
+						logger.info("Restricted write applied", {
+							...fields,
+							...(typeof p === "string" && { target: p }),
+						});
+					}
+					return result;
 				} catch (err) {
 					if (err instanceof AccessRefusal) {
 						// Refusal messages carry no path; the audit line carries the kind.
@@ -259,11 +285,16 @@ function createServer(
 						return errorResult(tool.name, keys, err.message);
 					}
 					const message = err instanceof Error ? err.message : String(err);
+					const code = (err as NodeJS.ErrnoException | undefined)?.code;
+					// A filesystem error message embeds the absolute vault path; restricted
+					// callers (and their log lines) get the error code's meaning instead.
+					const restricted = access !== "full" && typeof code === "string";
+					const shown = restricted ? describeFsError(code) : message;
 					logger.error(`Tool '${tool.name}' failed`, {
 						...fields,
-						error: message,
+						error: restricted ? code : message,
 					});
-					return errorResult(tool.name, keys, message);
+					return errorResult(tool.name, keys, shown);
 				}
 			},
 		);

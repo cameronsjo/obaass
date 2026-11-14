@@ -129,6 +129,17 @@ describe("containment: lexical escapes", () => {
 		await expect(vault.writeFile("x\0.md", "x")).rejects.toThrow();
 	});
 
+	it("normalizes .. inside the vault and never decodes percent-escapes", async () => {
+		await vault.writeFile("realdir/../norm.md", "n");
+		expect(await readFile(join(vaultPath, "norm.md"), "utf-8")).toBe("n");
+		await expect(vault.readFile("realdir/../../x.md")).rejects.toThrow(REFUSED);
+		await vault.writeFile("%2e%2e/x.md", "literal");
+		expect(await readFile(join(vaultPath, "%2e%2e", "x.md"), "utf-8")).toBe(
+			"literal",
+		);
+		expect(await listTree(outside)).not.toContain("x.md");
+	});
+
 	it("treats a file used as a directory as missing, not as an escape", async () => {
 		await expect(vault.readFile("real.md/x.md")).rejects.toThrow(/ENOTDIR/);
 		expect(await vault.exists("real.md/x.md")).toBe(false);

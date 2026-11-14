@@ -129,6 +129,7 @@ export type RefusalKind =
 	| "outside_root"
 	| "instruction_file"
 	| "protected_path"
+	| "write_scope"
 	| "write_operation"
 	| "overwrite"
 	| "regex"
@@ -147,7 +148,8 @@ interface RefusalWindow {
  * Refusal audit trail. The first refusal for a `(tier, tool, kind)` key in a
  * window logs at once; later ones only count, and `flush()` reports the count.
  * Tool names are logged only when registered; anything else is `unknown` plus
- * its length, so a caller cannot write arbitrary text into the log.
+ * its length, so a caller cannot write arbitrary text into the log. A refusal
+ * that is not about one tool (a rate limit) logs `tool: "all"`.
  */
 export class RefusalLog {
 	private windows = new Map<string, RefusalWindow & { fields: object }>();
