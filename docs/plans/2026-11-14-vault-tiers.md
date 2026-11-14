@@ -183,9 +183,9 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 | # | Claim the plan relies on | Probe (one read-only command) | Step that acts on it | At pickup | At the acting step |
 | -: | ---- | ---- | ---- | ---- | ---- |
-| 1 | The installed `@modelcontextprotocol/{server,core,node}` are past every advisory affecting them, including CVE-2026-111771 and CVE-2026-111768 (server fixed in 2.3.0) | `for c in CVE-2026-111771 CVE-2026-111768; do gh api "/advisories?cve_id=$c" --jq '.[].vulnerabilities[]\|select(.package.name\|startswith("@modelcontextprotocol/"))\|[.package.name,.first_patched_version]'; done` plus `npm ls @modelcontextprotocol/server @modelcontextprotocol/core @modelcontextprotocol/node` | Task 3 | CONFIRMED (server 2.3.1 ≥ 2.3.0; no advisory lists core; node's only advisory is fixed in 2.1.0) | |
-| 2 | CVE-2026-111771 is about the SDK's bearer-auth helpers, which this server does not use (it has its own `auth.ts`) | `grep -rn "requireBearerAuth\|verifyBearerToken" mcp/src` returns nothing | Task 3 | CONFIRMED | |
-| 3 | The image tag `node:22.23.5-alpine3.24` exists | `curl -s "https://hub.docker.com/v2/repositories/library/node/tags/22.23.5-alpine3.24" \| jq -r .name` | Task 3 | CONFIRMED (listed in the hub tag search) | |
+| 1 | The installed `@modelcontextprotocol/{server,core,node}` are past every advisory affecting them, including CVE-2026-111771 and CVE-2026-111768 (server fixed in 2.3.0) | `for c in CVE-2026-111771 CVE-2026-111768; do gh api "/advisories?cve_id=$c" --jq '.[].vulnerabilities[]\|select(.package.name\|startswith("@modelcontextprotocol/"))\|[.package.name,.first_patched_version]'; done` plus `npm ls @modelcontextprotocol/server @modelcontextprotocol/core @modelcontextprotocol/node` | Task 3 | CONFIRMED (server 2.3.1 ≥ 2.3.0; no advisory lists core; node's only advisory is fixed in 2.1.0) | CONFIRMED |
+| 2 | CVE-2026-111771 is about the SDK's bearer-auth helpers, which this server does not use (it has its own `auth.ts`) | `grep -rn "requireBearerAuth\|verifyBearerToken" mcp/src` returns nothing | Task 3 | CONFIRMED | CONFIRMED (no match in `mcp/src`) |
+| 3 | The image tag `node:22.23.5-alpine3.24` exists | `curl -s "https://hub.docker.com/v2/repositories/library/node/tags/22.23.5-alpine3.24" \| jq -r .name` | Task 3 | CONFIRMED (listed in the hub tag search) | CONFIRMED (amd64 and arm64/v8 present) |
 | 4 | `toNodeHandler` forwards `req.auth` as the factory's `ctx.authInfo`, in both protocol eras | the `toNodeHandler` doc in `mcp/node_modules/@modelcontextprotocol/node/dist/index.d.mts`, then the Task 2 per-era test | Task 2 | CONFIRMED (types) | |
 | 5 | A write through a dangling in-vault symlink lands outside the vault on `origin/main` | `npx vitest run tests/vault/containment.test.ts` (RED) | Task 1 | CONFIRMED | |
 | 6 | A `v*` tag push publishes semver tags; a `main` push publishes `main`, short-sha, and `latest` | `grep -n "type=" .github/workflows/mcp-docker.yml` | Task 5 | CONFIRMED | |
@@ -295,12 +295,12 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 **Steps:**
 
-- [ ] Re-run Live-state claims 1-3
-- [ ] Pin both Dockerfile stages to `node:22.23.5-alpine3.24`
-- [ ] `npm audit fix` without `--force` for the `@hono/node-server` advisory; keep it only if the lockfile diff is transitive-only
-- [ ] `npm run build && npm run test:coverage && npm run lint && npm run test:smoke`
-- [ ] Write `docker-tier-smoke.sh`. It builds the image, runs it with throwaway tokens from `openssl rand -hex 32` against a temp vault, asserts the `tools/list` count per tier, a 401 with no token, and an out-of-tier refusal, removes the container, and exits non-zero on any mismatch. Run it and record the output in this step.
-- [ ] Commit: `build(mcp): pin node 22.23.5 base image; tier smoke script`
+- [x] Re-run Live-state claims 1-3
+- [x] Pin both Dockerfile stages to `node:22.23.5-alpine3.24`
+- [x] `npm audit fix` without `--force` for the `@hono/node-server` advisory; keep it only if the lockfile diff is transitive-only
+- [x] `npm run build && npm run test:coverage && npm run lint && npm run test:smoke`
+- [x] Write `docker-tier-smoke.sh`. It builds the image, runs it with throwaway tokens from `openssl rand -hex 32` against a temp vault, asserts the `tools/list` count per tier, a 401 with no token, and an out-of-tier refusal, removes the container, and exits non-zero on any mismatch. Run it and record the output in this step. Measured 2026-11-14 (`bash mcp/scripts/docker-tier-smoke.sh`, local arm64 build): no token 401; full 200 with 16 tools; limited 200 with 12 tools; limited `delete_note` refused as `Tool delete_note not found`; `hello.md` still present; no token value in container logs; `All tier smoke checks passed`. Earlier runs went red for real faults (Host guard 403 before the script allowed its published authority, then a missing `Mcp-Name` header). The token-in-logs branch was not staged red, since that needs an image built to log a token.
+- [x] Commit: `build(mcp): pin node 22.23.5 base image; tier smoke script`
 
 ### Task 4 — Docs, runbook, changelog
 
@@ -358,6 +358,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 - **2026-11-14 — Task 2: `createMcpApp` throws on unknown option keys.** Migrating the tests showed that a caller still passing the retired `{ authToken }` option got an app with no bearer middleware and no error (vitest does not type-check). This is a chosen improvement: an unrecognized option now refuses to build the app.
 - **2026-11-14 — Task 2: `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) names the gateway's correlation header.** The plan said a gateway id MAY be recorded but named no header. gateway-lane has been asked which header it will send.
+- **2026-11-14 — Task 3: the `@hono/node-server` advisory stays open (moderate, unreachable here).** `npm audit fix` without `--force` only moved it 1.19.17 → 1.19.19 inside the 1.x line. The fix is 2.x, which needs `@modelcontextprotocol/node` 2.1.2, which in turn pulls `@modelcontextprotocol/server` 2.4.0, a minor bump of the SDK under the new control. The adapter imports only `getRequestListener` (the advisory covers `serveStatic` and proxy path ACLs), and Express does the routing. So the SDK bump is left to its own change.
+- **2026-11-14 — Task 3: the smoke script sets `MCP_ALLOWED_HOSTS` to its published authority.** The Host guard refuses a host port that differs from the container's, so the script picks the port up front.
 - **2026-11-14 — Task 2: the refusal type is `AccessRefusal` with its own `overwrite` and `regex` kinds**, in place of a path-only type, since one class now carries every refusal the audit log counts.
 
 ## Learnings
