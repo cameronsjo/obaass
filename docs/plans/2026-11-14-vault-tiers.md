@@ -256,12 +256,12 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 
 **Steps:**
 
-- [ ] `tiers.test.ts` over a real HTTP app with every provider registered (backup over a real temp git repo, plugin over a stub `PluginClient`):
+- [x] `tiers.test.ts` over a real HTTP app with every provider registered (backup over a real temp git repo, plugin over a stub `PluginClient`):
   - For `full`, `limited`, and `anonymous`, `tools/list` equals a literal name list written in the test, not derived from `LIMITED_TOOLS`.
   - For each out-of-tier tool, `tools/call` returns the SDK's unknown-tool error and causes no side effect (vault tree unchanged).
   - Every in-tier tool succeeds on a valid input.
   - Run the cases in both protocol eras.
-- [ ] Policy tests with fixtures outside `IGNORED_DIRS` (`.private/n.md`, root `.hidden.md`):
+- [x] Policy tests with fixtures outside `IGNORED_DIRS` (`.private/n.md`, root `.hidden.md`):
   - `limited`: refuses them on read and write, hides them from structure, recent files, tags, and searches, and refuses a non-`.md` write (including `.js`).
   - `limited`: refuses a write to `CLAUDE.md` at any depth and any case, and to the template path.
   - `limited`: refuses `overwrite: true` with an error, the file unchanged.
@@ -269,18 +269,18 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - `limited`: `search_content` with `regex: true` is refused.
   - `full`: still sees and writes all of these.
   - No new refusal message contains the input path.
-- [ ] Mode-table tests:
+- [x] Mode-table tests:
   - Limited-only config: a request with no token gets 401, and a request carrying a would-be full token gets 401.
   - With auth configured, a factory call with `authInfo` undefined registers zero tools, and so do `clientId: "Full"` and `clientId: "admin"`.
   - The no-token loopback mode serves every tool; the opt-out mode serves `anonymous`.
   - `/health` gives detail only to the full token, never to `limited` or to an unauthenticated caller in a limited-only deploy.
-- [ ] Log tests: N refused calls to one tool in a window produce one line with `count=N`, and a second tool produces its own line. An unregistered name logs as `unknown`. No path value appears in the log output. The startup line carries each fingerprint and no token value or substring of one.
-- [ ] Config tests: empty limited var is unset; limited-only starts off-loopback; equal tokens refuse with text naming both variables and containing neither value; length and whitespace rules apply
-- [ ] Run — RED
-- [ ] Implement per Architecture. That includes the refusal-log hook: check the SDK for an unknown-tool callback first, else read the parsed body. It also includes the tier field on every wrapper line, the `tiers` startup field, `ZodError` issues formatted as `VAR: reason` in the fatal log, and the per-minute cap for `limited`/`anonymous`.
-- [ ] Run — GREEN
-- [ ] Stage two breaks, one at a time, each from a `cp`: make `getServedTools` ignore access (the out-of-tier tests go red), then bind limited handlers to the unrestricted service (the policy tests go red). Restore both and re-run green.
-- [ ] Commit: `feat(mcp): access tiers bound to the bearer token`
+- [x] Log tests: N refused calls to one tool in a window produce one line with `count=N`, and a second tool produces its own line. An unregistered name logs as `unknown`. No path value appears in the log output. The startup line carries each fingerprint and no token value or substring of one.
+- [x] Config tests: empty limited var is unset; limited-only starts off-loopback; equal tokens refuse with text naming both variables and containing neither value; length and whitespace rules apply
+- [x] Run — RED
+- [x] Implement per Architecture. That includes the refusal-log hook: check the SDK for an unknown-tool callback first, else read the parsed body. It also includes the tier field on every wrapper line, the `tiers` startup field, `ZodError` issues formatted as `VAR: reason` in the fatal log, and the per-minute cap for `limited`/`anonymous`.
+- [x] Run — GREEN
+- [x] Stage two breaks, one at a time, each from a `cp`: make `getServedTools` ignore access (the out-of-tier tests go red), then bind limited handlers to the unrestricted service (the policy tests go red). Restore both and re-run green.
+- [x] Commit: `feat(mcp): access tiers bound to the bearer token`
 
 ### Task 3 — Dependencies and startup checks
 
@@ -355,5 +355,9 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 ---
 
 ## Deviations
+
+- **2026-11-14 — Task 2: `createMcpApp` throws on unknown option keys.** Migrating the tests showed that a caller still passing the retired `{ authToken }` option got an app with no bearer middleware and no error (vitest does not type-check). This is a chosen improvement: an unrecognized option now refuses to build the app.
+- **2026-11-14 — Task 2: `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) names the gateway's correlation header.** The plan said a gateway id MAY be recorded but named no header. gateway-lane has been asked which header it will send.
+- **2026-11-14 — Task 2: the refusal type is `AccessRefusal` with its own `overwrite` and `regex` kinds**, in place of a path-only type, since one class now carries every refusal the audit log counts.
 
 ## Learnings

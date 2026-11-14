@@ -4,10 +4,12 @@ import type { Config } from "../config.js";
 import { escapeRegex } from "../util.js";
 import { updateFrontmatter } from "../vault/frontmatter.js";
 import {
+	AccessRefusal,
 	type DirectoryEntry,
 	FileExistsError,
 	type VaultService,
 } from "../vault/vault-service.js";
+import type { Access } from "./tiers.js";
 import type { ToolDefinition, ToolProvider } from "./types.js";
 
 function textResult(text: string): CallToolResult {
@@ -75,10 +77,24 @@ export class VaultToolProvider implements ToolProvider {
 	id = "vault";
 	name = "Vault Tools";
 
+	/** The policy-bound view every non-`full` access uses. */
+	private readonly restrictedVault: VaultService;
+
 	constructor(
 		private vault: VaultService,
 		private config: Config,
-	) {}
+	) {
+		this.restrictedVault = vault.withPolicy({
+			protectedPaths: config.dailyNoteTemplate
+				? [config.dailyNoteTemplate]
+				: [],
+		});
+	}
+
+	/** Fails closed: anything other than `full` gets the restricted view. */
+	private vaultFor(access: Access): VaultService {
+		return access === "full" ? this.vault : this.restrictedVault;
+	}
 
 	getTools(): ToolDefinition[] {
 		return [
@@ -112,9 +128,10 @@ export class VaultToolProvider implements ToolProvider {
 					.string()
 					.describe("Vault-relative path to the note (e.g. 'folder/note.md')"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path } = params as { path: string };
-				const content = await this.vault.readFile(path);
+				const content = await vault.readFile(path);
 				return textResult(content);
 			},
 		};
@@ -133,7 +150,8 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Allow overwriting an existing file (default: false)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path, content, overwrite } = params as {
 					path: string;
 					content: string;
@@ -144,13 +162,19 @@ export class VaultToolProvider implements ToolProvider {
 						`Error: File already exists at '${path}'. Use overwrite: true to replace.`,
 					);
 				if (overwrite) {
-					await this.vault.writeFile(path, content);
+					if (ctx.access !== "full") {
+						throw new AccessRefusal(
+							"overwrite is not permitted for this access tier; the note was not changed.",
+							"overwrite",
+						);
+					}
+					await vault.writeFile(path, content);
 					return textResult(`Created note at '${path}'.`);
 				}
-				if (await this.vault.exists(path)) return exists();
+				if (await vault.exists(path)) return exists();
 				try {
 					// Exclusive: a file that appears after the check above is not replaced.
-					await this.vault.createFile(path, content);
+					await vault.createFile(path, content);
 				} catch (err) {
 					if (err instanceof FileExistsError) return exists();
 					throw err;
@@ -172,19 +196,20 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Append under this heading (if found)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path, content, heading } = params as {
 					path: string;
 					content: string;
 					heading?: string;
 				};
 				if (heading) {
-					await this.vault.updateIfUnchanged(path, (existing) =>
+					await vault.updateIfUnchanged(path, (existing) =>
 						insertUnderHeading(existing, heading, content),
 					);
 				} else {
 					// O_APPEND: no read-modify-write, so a concurrent edit is kept.
-					await this.vault.appendFile(path, `\n\n${content}`);
+					await vault.appendFile(path, `\n\n${content}`);
 				}
 				return textResult(`Appended to '${path}'.`);
 			},
@@ -193,9 +218,10 @@ export class VaultToolProvider implements ToolProvider {
 
 	private deleteNoteHandler = async (
 		params: Record<string, unknown>,
+		ctx: { access: Access },
 	): Promise<CallToolResult> => {
 		const { path } = params as { path: string };
-		await this.vault.deleteFile(path);
+		await this.vaultFor(ctx.access).deleteFile(path);
 		return textResult(`Deleted '${path}'.`);
 	};
 
@@ -262,14 +288,22 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Maximum results to return (default: 100, max: 1000)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { query, regex, caseSensitive, maxResults } = params as {
 					query: string;
 					regex?: boolean;
 					caseSensitive?: boolean;
 					maxResults?: number;
 				};
-				const results = await this.vault.searchContent(query, {
+				if (regex && ctx.access !== "full") {
+					// A caller-supplied regex can stall the event loop for every tier (ReDoS).
+					throw new AccessRefusal(
+						"regex search is not permitted for this access tier; search for literal text instead.",
+						"regex",
+					);
+				}
+				const results = await vault.searchContent(query, {
 					regex,
 					caseSensitive,
 					maxResults,
@@ -291,9 +325,10 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Subdirectory to list (default: vault root)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path } = params as { path?: string };
-				const structure = await this.vault.getStructure(path);
+				const structure = await vault.getStructure(path);
 				return jsonResult({ entries: structure }, structure);
 			},
 		};
@@ -324,9 +359,10 @@ export class VaultToolProvider implements ToolProvider {
 			inputSchema: z.object({
 				path: z.string().describe("Vault-relative path to the note"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path } = params as { path: string };
-				const metadata = await this.vault.getMetadata(path);
+				const metadata = await vault.getMetadata(path);
 				return jsonResult({ ...metadata });
 			},
 		};
@@ -344,8 +380,9 @@ export class VaultToolProvider implements ToolProvider {
 				"Get all tags used across the vault with their usage counts. Takes no arguments. " +
 				"To find the notes carrying a given tag, use search_by_tag.",
 			inputSchema: z.object({}),
-			handler: async () => {
-				const tags = await this.vault.getAllTags();
+			handler: async (_params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
+				const tags = await vault.getAllTags();
 				const sorted = Object.entries(tags).sort((a, b) => b[1] - a[1]);
 				return jsonResult({
 					count: sorted.length,
@@ -368,9 +405,10 @@ export class VaultToolProvider implements ToolProvider {
 			inputSchema: z.object({
 				tag: z.string().describe("Tag to search for (with or without #)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { tag } = params as { tag: string };
-				const files = await this.vault.findByTag(tag);
+				const files = await vault.findByTag(tag);
 				return jsonResult({ count: files.length, files });
 			},
 		};
@@ -395,12 +433,13 @@ export class VaultToolProvider implements ToolProvider {
 						"Property value to match (omit to find all with this property)",
 					),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { property, value } = params as {
 					property: string;
 					value?: string;
 				};
-				const results = await this.vault.findByProperty(property, value);
+				const results = await vault.findByProperty(property, value);
 				return jsonResult({ count: results.length, results });
 			},
 		};
@@ -430,9 +469,10 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Number of files to return (default: 20, max: 500)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { count } = params as { count?: number };
-				const files = await this.vault.getRecentFiles(count);
+				const files = await vault.getRecentFiles(count);
 				const recent = files.map((f) => ({
 					path: f.path,
 					modified: new Date(f.mtimeMs).toISOString(),
@@ -454,14 +494,15 @@ export class VaultToolProvider implements ToolProvider {
 					.record(z.string(), z.unknown())
 					.describe("Key-value pairs to set in frontmatter"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { path, properties } = params as {
 					path: string;
 					properties: Record<string, unknown>;
 				};
-				const raw = await this.vault.readFile(path);
+				const raw = await vault.readFile(path);
 				const updated = updateFrontmatter(raw, properties);
-				await this.vault.writeFile(path, updated);
+				await vault.writeFile(path, updated);
 				return textResult(`Updated frontmatter on '${path}'.`);
 			},
 		};
@@ -481,7 +522,8 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Update wikilinks in other notes (default: true)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const {
 					oldPath,
 					newPath,
@@ -493,13 +535,13 @@ export class VaultToolProvider implements ToolProvider {
 				};
 
 				if (updateLinks) {
-					const count = await this.vault.renameWithLinks(oldPath, newPath);
+					const count = await vault.renameWithLinks(oldPath, newPath);
 					return textResult(
 						`Renamed '${oldPath}' to '${newPath}'. Updated ${count} file(s) with wikilink references.`,
 					);
 				}
 
-				await this.vault.renameFile(oldPath, newPath);
+				await vault.renameFile(oldPath, newPath);
 				return textResult(`Renamed '${oldPath}' to '${newPath}'.`);
 			},
 		};
@@ -516,7 +558,8 @@ export class VaultToolProvider implements ToolProvider {
 					.optional()
 					.describe("Date in YYYY-MM-DD format (default: today)"),
 			}),
-			handler: async (params) => {
+			handler: async (params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const { date } = params as { date?: string };
 				const targetDate = date ?? new Date().toISOString().slice(0, 10);
 				if (!DAILY_NOTE_DATE.test(targetDate)) {
@@ -527,8 +570,8 @@ export class VaultToolProvider implements ToolProvider {
 				const folder = this.config.dailyNoteFolder ?? "Daily Notes";
 				const path = `${folder}/${targetDate}.md`;
 
-				if (await this.vault.exists(path)) {
-					const content = await this.vault.readFile(path);
+				if (await vault.exists(path)) {
+					const content = await vault.readFile(path);
 					return textResult(content);
 				}
 
@@ -545,11 +588,11 @@ export class VaultToolProvider implements ToolProvider {
 				}
 
 				try {
-					await this.vault.createFile(path, content);
+					await vault.createFile(path, content);
 				} catch (err) {
 					// Another client created it since the check: return theirs, never replace.
 					if (err instanceof FileExistsError) {
-						return textResult(await this.vault.readFile(path));
+						return textResult(await vault.readFile(path));
 					}
 					throw err;
 				}
@@ -565,12 +608,13 @@ export class VaultToolProvider implements ToolProvider {
 			description:
 				"Read vault-specific instructions from CLAUDE.md and AGENTS.md at the vault root. Takes no arguments.",
 			inputSchema: z.object({}),
-			handler: async () => {
+			handler: async (_params, ctx) => {
+				const vault = this.vaultFor(ctx.access);
 				const parts: string[] = [];
 
 				for (const filename of ["CLAUDE.md", "AGENTS.md"]) {
-					if (await this.vault.exists(filename)) {
-						const content = await this.vault.readFile(filename);
+					if (await vault.exists(filename)) {
+						const content = await vault.readFile(filename);
 						parts.push(`# ${filename}\n\n${content}`);
 					}
 				}

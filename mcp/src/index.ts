@@ -1,4 +1,5 @@
-import { loadConfig } from "./config.js";
+import { ZodError } from "zod";
+import { configuredTokens, loadConfig } from "./config.js";
 import { createHealthHandler } from "./health.js";
 import { BackupClient } from "./integrations/backup-client.js";
 import { PluginClient } from "./integrations/plugin-client.js";
@@ -8,12 +9,15 @@ import { installShutdownHandlers } from "./shutdown.js";
 import { BackupToolProvider } from "./tools/backup-tools.js";
 import { ToolRegistry } from "./tools/index.js";
 import { PluginToolProvider } from "./tools/plugin-tools.js";
+import { tokenFingerprints } from "./tools/tiers.js";
 import { VaultToolProvider } from "./tools/vault-tools.js";
 import { VaultService } from "./vault/vault-service.js";
 
 async function main() {
 	const config = loadConfig();
 	setLogLevel(config.logLevel);
+	const tokens = configuredTokens(config);
+	const fingerprints = tokenFingerprints(tokens);
 
 	logger.info("Starting obaass-mcp", {
 		vaultPath: config.vaultPath,
@@ -21,8 +25,9 @@ async function main() {
 		backupEnabled: !!config.backupUrl,
 		pluginEnabled: !!config.pluginMcpUrl,
 		host: config.httpHost,
-		authRequired: !!config.authToken,
-		readOnly: config.readOnly,
+		tiers: fingerprints.map((f) => f.tier),
+		tokenFingerprints: fingerprints,
+		anonymous: config.anonymous,
 	});
 	if (config.accessWarning) logger.warn(config.accessWarning);
 
@@ -51,8 +56,9 @@ async function main() {
 
 	// Create MCP app
 	const { app, close } = createMcpApp(registry, config.httpPath, {
-		authToken: config.authToken,
-		readOnly: config.readOnly,
+		tokens,
+		anonymous: config.anonymous,
+		upstreamRequestIdHeader: config.upstreamRequestIdHeader,
 	});
 
 	// Health endpoint
@@ -70,11 +76,10 @@ async function main() {
 
 	// Start server
 	const httpServer = app.listen(config.httpPort, config.httpHost, () => {
-		const tools = registry.getServedTools(config.readOnly);
 		logger.info("obaass-mcp ready", {
 			address: `http://${config.httpHost}:${config.httpPort}`,
 			mcpPath: config.httpPath,
-			toolCount: tools.length,
+			toolCount: registry.getAllTools().length,
 			providers: registry.getProviderIds(),
 		});
 	});
@@ -82,9 +87,17 @@ async function main() {
 	installShutdownHandlers(httpServer, pluginClient, close);
 }
 
+/** Config errors as `field: reason` lines; the messages name the env variable. */
+function describeStartupError(err: unknown): string {
+	if (err instanceof ZodError) {
+		return err.issues
+			.map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`)
+			.join("; ");
+	}
+	return err instanceof Error ? err.message : String(err);
+}
+
 main().catch((err) => {
-	logger.error("Fatal startup error", {
-		error: err instanceof Error ? err.message : String(err),
-	});
+	logger.error("Fatal startup error", { error: describeStartupError(err) });
 	process.exit(1);
 });

@@ -31,7 +31,7 @@ async function callTool(
 	tool: ToolDefinition,
 	params: Record<string, unknown>,
 ): Promise<string> {
-	const result = await tool.handler(params);
+	const result = await tool.handler(params, { access: "full" });
 	const block = result.content[0];
 	if (block.type !== "text") throw new Error("expected text content");
 	return block.text;

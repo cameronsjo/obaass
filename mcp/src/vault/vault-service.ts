@@ -17,6 +17,7 @@ import {
 	extname,
 	isAbsolute,
 	join,
+	normalize,
 	relative,
 	sep,
 } from "node:path";
@@ -50,6 +51,49 @@ export class FileExistsError extends Error {
 /** Thrown when a read-modify-write finds the file changed since it was read. */
 export class ConcurrentModificationError extends Error {}
 
+/** Why a path was refused; carried for the refusal audit log, never the path. */
+export type AccessRefusalKind =
+	| "outside_root"
+	| "symlink"
+	| "dot_segment"
+	| "non_md"
+	| "instruction_file"
+	| "protected_path"
+	| "write_operation"
+	| "overwrite"
+	| "regex";
+
+/** A containment, path-policy, or tier-capability refusal; `kind` feeds the audit log. */
+export class AccessRefusal extends Error {
+	constructor(
+		message: string,
+		readonly kind: AccessRefusalKind,
+	) {
+		super(message);
+	}
+}
+
+/**
+ * Restrictions for a non-`full` tier. Paths are vault-relative and compared
+ * case-insensitively.
+ */
+export interface PathPolicy {
+	/** Files the tier may never write, such as the configured daily-note template. */
+	protectedPaths: readonly string[];
+}
+
+/** Files agents load as instructions; a restricted tier may not write them anywhere. */
+const INSTRUCTION_FILES = new Set(["claude.md", "agents.md", "gemini.md"]);
+
+type Intent = "read" | "write";
+
+function policyRefusal(kind: AccessRefusalKind): AccessRefusal {
+	return new AccessRefusal(
+		`Path policy refused (${kind}): not permitted for this access tier.`,
+		kind,
+	);
+}
+
 export interface VaultFile {
 	path: string;
 	name: string;
@@ -75,7 +119,45 @@ export interface DirectoryEntry {
 export class VaultService {
 	private realVaultPath: string | undefined;
 
-	constructor(private readonly vaultPath: string) {}
+	constructor(
+		private readonly vaultPath: string,
+		private readonly policy?: PathPolicy,
+	) {}
+
+	/** A view of the same vault that enforces `policy` on every path and walk. */
+	withPolicy(policy: PathPolicy): VaultService {
+		return new VaultService(this.vaultPath, policy);
+	}
+
+	/**
+	 * Path-policy check for a vault-relative path. Applied to the requested path
+	 * and again to the resolved real path, so an in-vault link cannot reach a
+	 * dot folder or an instruction file under an innocent name.
+	 */
+	private checkPolicy(rel: string, intent: Intent): void {
+		if (!this.policy) return;
+		const segments = rel === "" ? [] : rel.split(sep);
+		if (segments.some((segment) => segment.startsWith("."))) {
+			throw policyRefusal("dot_segment");
+		}
+		if (intent === "read") return;
+		if (extname(rel).toLowerCase() !== ".md") throw policyRefusal("non_md");
+		if (INSTRUCTION_FILES.has(basename(rel).toLowerCase())) {
+			throw policyRefusal("instruction_file");
+		}
+		const lowered = rel.toLowerCase();
+		if (
+			this.policy.protectedPaths.some(
+				(p) => normalize(p).toLowerCase() === lowered,
+			)
+		) {
+			throw policyRefusal("protected_path");
+		}
+	}
+
+	private refuseWriteOperation(): void {
+		if (this.policy) throw policyRefusal("write_operation");
+	}
 
 	/**
 	 * Sync structural guard (fast prefilter): reject absolute inputs and `..` traversal.
@@ -84,14 +166,18 @@ export class VaultService {
 	 */
 	private resolve(vaultRelPath: string): string {
 		if (isAbsolute(vaultRelPath)) {
-			throw new Error(
+			throw new AccessRefusal(
 				`Path traversal rejected (absolute path): ${vaultRelPath}`,
+				"outside_root",
 			);
 		}
 		const resolved = join(this.vaultPath, vaultRelPath);
 		const rel = relative(this.vaultPath, resolved);
 		if (rel === ".." || rel.startsWith(`..${sep}`)) {
-			throw new Error(`Path traversal rejected: ${vaultRelPath}`);
+			throw new AccessRefusal(
+				`Path traversal rejected: ${vaultRelPath}`,
+				"outside_root",
+			);
 		}
 		return resolved;
 	}
@@ -112,12 +198,17 @@ export class VaultService {
 	 * not exist yet"; any other lstat error refuses. Returns the lexical path so
 	 * that delete and rename act on a link itself, not on its target.
 	 */
-	private async resolveSafe(vaultRelPath: string): Promise<string> {
+	private async resolveSafe(
+		vaultRelPath: string,
+		intent: Intent = "read",
+	): Promise<string> {
 		const resolved = this.resolve(vaultRelPath);
 		const realRoot = await this.getRealVaultPath();
 		const rel = relative(this.vaultPath, resolved);
+		this.checkPolicy(rel, intent);
 		const parts = rel === "" ? [] : rel.split(sep);
 		let current = realRoot;
+		let walked = 0;
 		for (const part of parts) {
 			const next = join(current, part);
 			let isLink: boolean;
@@ -125,10 +216,12 @@ export class VaultService {
 				isLink = (await lstat(next)).isSymbolicLink();
 			} catch (err) {
 				if ((err as NodeJS.ErrnoException).code === "ENOENT") break;
-				throw new Error(
+				throw new AccessRefusal(
 					`Path traversal rejected (unresolvable component): ${vaultRelPath}`,
+					"outside_root",
 				);
 			}
+			walked++;
 			if (!isLink) {
 				current = next;
 				continue;
@@ -137,16 +230,22 @@ export class VaultService {
 			try {
 				target = await realpath(next);
 			} catch {
-				throw new Error(
+				throw new AccessRefusal(
 					`Path traversal rejected (dangling symlink escape): ${vaultRelPath}`,
+					"symlink",
 				);
 			}
 			if (!isWithin(target, realRoot)) {
-				throw new Error(
+				throw new AccessRefusal(
 					`Path traversal rejected (symlink escape): ${vaultRelPath}`,
+					"symlink",
 				);
 			}
 			current = target;
+		}
+		if (this.policy) {
+			const realTarget = join(current, ...parts.slice(walked));
+			this.checkPolicy(relative(realRoot, realTarget), intent);
 		}
 		return resolved;
 	}
@@ -158,7 +257,8 @@ export class VaultService {
 
 	/** Write content to a file, creating parent directories as needed. */
 	async writeFile(path: string, content: string): Promise<void> {
-		const absPath = await this.resolveSafe(path);
+		this.refuseWriteOperation();
+		const absPath = await this.resolveSafe(path, "write");
 		await mkdir(dirname(absPath), { recursive: true });
 		await writeFile(absPath, content, "utf-8");
 	}
@@ -169,7 +269,7 @@ export class VaultService {
 	 * final component. Throws FileExistsError when the path is taken.
 	 */
 	async createFile(path: string, content: string): Promise<void> {
-		const absPath = await this.resolveSafe(path);
+		const absPath = await this.resolveSafe(path, "write");
 		await mkdir(dirname(absPath), { recursive: true });
 		try {
 			await writeFile(absPath, content, { encoding: "utf-8", flag: "wx" });
@@ -186,7 +286,7 @@ export class VaultService {
 	 * bytes are kept rather than overwritten by a stale read. Never creates.
 	 */
 	async appendFile(path: string, content: string): Promise<void> {
-		const absPath = await this.resolveSafe(path);
+		const absPath = await this.resolveSafe(path, "write");
 		const handle = await open(
 			absPath,
 			fsConstants.O_WRONLY | fsConstants.O_APPEND,
@@ -206,7 +306,7 @@ export class VaultService {
 		path: string,
 		transform: (content: string) => string,
 	): Promise<void> {
-		const absPath = await this.resolveSafe(path);
+		const absPath = await this.resolveSafe(path, "write");
 		const before = await stat(absPath);
 		const updated = transform(await this.readFile(path));
 		const after = await stat(absPath);
@@ -220,13 +320,15 @@ export class VaultService {
 
 	/** Delete a file. */
 	async deleteFile(path: string): Promise<void> {
-		await unlink(await this.resolveSafe(path));
+		this.refuseWriteOperation();
+		await unlink(await this.resolveSafe(path, "write"));
 	}
 
 	/** Rename/move a file. */
 	async renameFile(oldPath: string, newPath: string): Promise<void> {
-		const absOld = await this.resolveSafe(oldPath);
-		const absNew = await this.resolveSafe(newPath);
+		this.refuseWriteOperation();
+		const absOld = await this.resolveSafe(oldPath, "write");
+		const absNew = await this.resolveSafe(newPath, "write");
 		await mkdir(dirname(absNew), { recursive: true });
 		await fsRename(absOld, absNew);
 	}
@@ -254,6 +356,11 @@ export class VaultService {
 		};
 	}
 
+	/** Under a policy, dot entries are invisible to walks, trees, and searches. */
+	private hidden(name: string): boolean {
+		return !!this.policy && name.startsWith(".");
+	}
+
 	/** List all markdown files in the vault. */
 	async listMarkdownFiles(): Promise<VaultFile[]> {
 		const files: VaultFile[] = [];
@@ -265,9 +372,13 @@ export class VaultService {
 		const entries = await readdir(dir, { withFileTypes: true });
 		for (const entry of entries) {
 			if (entry.isDirectory()) {
-				if (IGNORED_DIRS.has(entry.name)) continue;
+				if (IGNORED_DIRS.has(entry.name) || this.hidden(entry.name)) continue;
 				await this.walkDir(join(dir, entry.name), files);
-			} else if (entry.isFile() && entry.name.endsWith(".md")) {
+			} else if (
+				entry.isFile() &&
+				entry.name.endsWith(".md") &&
+				!this.hidden(entry.name)
+			) {
 				const absPath = join(dir, entry.name);
 				const relPath = relative(this.vaultPath, absPath);
 				const s = await stat(absPath);
@@ -296,10 +407,10 @@ export class VaultService {
 
 		for (const entry of entries) {
 			if (entry.isDirectory()) {
-				if (IGNORED_DIRS.has(entry.name)) continue;
+				if (IGNORED_DIRS.has(entry.name) || this.hidden(entry.name)) continue;
 				const children = await this.buildTree(join(dir, entry.name));
 				result.push({ name: entry.name, type: "directory", children });
-			} else if (entry.isFile()) {
+			} else if (entry.isFile() && !this.hidden(entry.name)) {
 				result.push({ name: entry.name, type: "file" });
 			}
 		}
