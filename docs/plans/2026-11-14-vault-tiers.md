@@ -1,6 +1,6 @@
 ---
 status: in-flight
-next: "Task 5: polish → Opus security review → gateway-lane agreement on CAM-720 → CI green → ready flip → Cameron go for merge and v0.2.0"
+next: "Cameron go → bump 0.1.0→0.2.0 (package.json, server.ts, health.ts, changelog heading) → merge #35 → tag v0.2.0 → scripts/release-handoff.sh v0.2.0 → post tag and digest on CAM-720"
 branch: cam-723-vault-tiers-make-the-vault-mcp-server-enforce-an
 pr: cameronsjo/obaass#35
 updated: 2026-11-14
@@ -348,8 +348,8 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - `mcp/src/tools/{tiers,index,types,vault-tools,backup-tools,plugin-tools}.ts`
   - `mcp/src/vault/vault-service.ts`
   - `toNodeHandler` in `mcp/node_modules/@modelcontextprotocol/node/dist/index.mjs`
-- [ ] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI image build green and the local suite green at head (CI runs no test job; cameronsjo/obaass#36); flip ready; report ready on CAM-720 and `hc send t5k`
-- [ ] File on `cameronsjo/obsidi-backup`: the Untitled renamer's `sanitize_title` keeps a leading `.`, so content a `limited` client writes can steer a rename to a dot-prefixed name
+- [x] gateway-lane has agreed names and lists on CAM-720 (rename and re-run if not); CI image build green and the local suite green at head (CI runs no test job; cameronsjo/obaass#36); flip ready; report ready on CAM-720 and `hc send t5k`
+- [x] File on `cameronsjo/obsidi-backup` (cameronsjo/obsidi-backup#15): the Untitled renamer's `sanitize_title` keeps a leading `.`, so content a `limited` client writes can steer a rename to a dot-prefixed name
 - [ ] After Cameron's go: bump `0.1.0` → `0.2.0` in `package.json`, `server.ts`, `health.ts`, and the changelog heading; merge; tag `v0.2.0`; run `scripts/release-handoff.sh v0.2.0`; post its output on CAM-720
 
 ---
@@ -362,7 +362,7 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
   - The refusal-trail test checks the rate-limit line's `requestId`.
   - The plan cites cameronsjo/obaass#36.
 
-- **2026-11-14 — Contract change, decided by Cameron in session: `full` loses write access to hidden paths.** The plan kept `full` able to write `.git/` and `.obsidian/` so existing consumers would keep working. That left the full token able to plant a command in `.git/config` or code in a plugin file. Cameron chose to remediate. Every tier now refuses writes, deletes, and renames on a path with a dot segment, on the requested and the resolved path. Reads and `backup_restore` are unchanged. `rename`'s link rewrite skips hidden notes. This narrows `full`'s behavior, which the Global Constraints had kept unchanged; it is the one intended exception. A staged break turned the new test red.
+- **2026-11-14 — Contract change, decided by Cameron in session: `full` loses write access to hidden paths.** The plan kept `full` able to write `.git/` and `.obsidian/` so existing consumers would keep working. That left the full token able to plant a command in `.git/config` or code in a plugin file. Cameron chose to remediate. Every tier now refuses writes, deletes, and renames on a path with a dot segment, on the requested and the resolved path. Reads and `backup_restore` are unchanged. `rename`'s link rewrite skips hidden notes. This narrows `full`'s behavior, which the Global Constraints had kept unchanged. It is one of two intended exceptions. The other comes from the round-2 template fold: a `DAILY_NOTE_TEMPLATE` path that runs through a file (`real.md/x`) now fails `daily_note` in every tier instead of falling back to the default note, a loud failure on an operator misconfiguration. A staged break turned the new test red.
 
 - **2026-11-14 — PR review round 1.**
   - The refusal trail gets an HTTP-level test, which goes red when the `refusals.record` calls are removed.
