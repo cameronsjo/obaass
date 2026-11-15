@@ -258,7 +258,7 @@ function createServer(
 ): McpServer {
 	const server = new McpServer({
 		name: "obaass-mcp",
-		version: "0.1.0",
+		version: "0.2.0",
 	});
 	// No valid access (auth configured, tier missing or unknown): register nothing.
 	if (!access) return server;

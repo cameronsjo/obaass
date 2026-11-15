@@ -46,7 +46,7 @@ URL="http://127.0.0.1:$PORT/mcp"
 
 healthy=no
 for _ in $(seq 1 30); do
-	if curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then healthy=yes; break; fi
+	if curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then healthy=yes; break; fi
 	sleep 1
 done
 if [[ "$healthy" != yes ]]; then
@@ -67,7 +67,7 @@ rpc() {
 		"io.modelcontextprotocol/protocolVersion":"2026-07-28",
 		"io.modelcontextprotocol/clientCapabilities":{},
 		"io.modelcontextprotocol/clientInfo":{name:"tier-smoke",version:"1"}}})}')
-	curl -sS -o "$BODY" -w '%{http_code}' ${auth[@]+"${auth[@]}"} \
+	curl -sS --max-time 15 -o "$BODY" -w '%{http_code}' ${auth[@]+"${auth[@]}"} \
 		-H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
 		-H 'MCP-Protocol-Version: 2026-07-28' -H "Mcp-Method: $2" \
 		-d "$body" "$URL"

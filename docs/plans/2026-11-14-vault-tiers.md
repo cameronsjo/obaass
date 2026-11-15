@@ -1,6 +1,6 @@
 ---
 status: in-flight
-next: "Cameron go → bump 0.1.0→0.2.0 (package.json, server.ts, health.ts, changelog heading) → merge #35 → tag v0.2.0 → scripts/release-handoff.sh v0.2.0 → post tag and digest on CAM-720"
+next: "Cameron approved merge and v0.2.0 (via the orchestrator, 2026-11-15); version bumped with the CodeRabbit fixes → fresh review at head → merge #35 → tag v0.2.0 → scripts/release-handoff.sh v0.2.0 → post tag and digest on CAM-720"
 branch: cam-723-vault-tiers-make-the-vault-mcp-server-enforce-an
 pr: cameronsjo/obaass#35
 updated: 2026-11-14
@@ -402,5 +402,6 @@ request ─► httpSecurity ─► bearerAuth(tokens) ─► express.json ─►
 - **2026-11-14 — Task 3: the `@hono/node-server` advisory stays open (moderate, unreachable here).** `npm audit fix` without `--force` only moved it 1.19.17 → 1.19.19 inside the 1.x line. The fix is 2.x, which needs `@modelcontextprotocol/node` 2.1.2, which in turn pulls `@modelcontextprotocol/server` 2.4.0, a minor bump of the SDK under the new control. The adapter imports only `getRequestListener` (the advisory covers `serveStatic` and proxy path ACLs), and Express does the routing. So the SDK bump is left to its own change.
 - **2026-11-14 — Task 3: the smoke script sets `MCP_ALLOWED_HOSTS` to its published authority.** The Host guard refuses a host port that differs from the container's, so the script picks the port up front.
 - **2026-11-14 — Task 2: the refusal type is `AccessRefusal` with its own `overwrite` and `regex` kinds**, in place of a path-only type, since one class now carries every refusal the audit log counts.
+- **2026-11-15 — CodeRabbit round at `c1d2f4f`: three code findings held up and are fixed in place.** (1) A protected template that is a symlink left its target writable by `limited` under the target's own name; restricted writes now also check each protected path's resolved target. (2) Writes opened their target by name after the check, so a symlink swapped in between was followed; writes now open the checked real target with `O_NOFOLLOW`, and the read-modify-write reads and writes through one handle. Ancestor-directory swaps are not covered; an actor able to swap them already has write access to the vault. (3) Two in-process writes to one note could both pass the size/mtime check and drop each other's text; writes to a note now queue per real path across tiers. Outside writers are still caught only by the size/mtime check. The runbook now says to recreate (not restart) the container, and names the loopback tokenless mode both on retirement and on rollback. The 0.2.0 version bump rides in the same commit.
 
 ## Learnings

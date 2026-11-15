@@ -75,7 +75,7 @@ export function createHealthHandler(deps: HealthDeps) {
 		res.status(statusCode).json({
 			status,
 			name: "obaass-mcp",
-			version: "0.1.0",
+			version: "0.2.0",
 			vault: {
 				path: config.vaultPath,
 				fileCount,

@@ -1,4 +1,5 @@
 import {
+	lstat,
 	mkdir,
 	mkdtemp,
 	readFile,
@@ -9,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VaultService } from "../../src/vault/vault-service.js";
 
 /**
@@ -257,7 +258,52 @@ describe("containment: symlinks", () => {
 		expect(await readFile(join(vaultPath, "realdir", "new.md"), "utf-8")).toBe(
 			"via alias",
 		);
+		// A note that is itself an in-vault link: writes reach its target.
+		await vault.appendFile("alias.md", "+a");
+		await vault.updateIfUnchanged("alias.md", (c) => `${c}+u`);
+		expect(await readFile(join(vaultPath, "real.md"), "utf-8")).toBe(
+			"real+a+u",
+		);
+		expect((await lstat(join(vaultPath, "alias.md"))).isSymbolicLink()).toBe(
+			true,
+		);
 	});
+});
+
+/**
+ * The race resolveSafe cannot see: the checked note is replaced by a link to an
+ * outside file after the check and before the open. Simulated by swapping the
+ * file inside the check itself, so the write sees a checked path that is now a
+ * symlink. Each write must refuse it rather than follow it.
+ */
+describe("writes refuse a symlink swapped in after the check", () => {
+	type Target = { lexical: string; real: string };
+	type Seam = { resolveTarget(p: string, i: string): Promise<Target> };
+	const writes: Array<[string, (v: VaultService) => Promise<void>]> = [
+		["appendFile", (v) => v.appendFile("real.md", "PWN")],
+		[
+			"updateIfUnchanged",
+			(v) => v.updateIfUnchanged("real.md", (c) => `${c}PWN`),
+		],
+		["writeFile", (v) => v.writeFile("real.md", "PWN")],
+	];
+	for (const [name, write] of writes) {
+		it(name, async () => {
+			const v = new VaultService(vaultPath);
+			const seam = v as unknown as Seam;
+			const checkOnly = seam.resolveTarget.bind(v);
+			vi.spyOn(seam, "resolveTarget").mockImplementation(async (p, i) => {
+				const checked = await checkOnly(p, i);
+				await rm(join(vaultPath, "real.md"));
+				await symlink(join(outside, "secret.txt"), join(vaultPath, "real.md"));
+				return checked;
+			});
+			await expect(write(v)).rejects.toMatchObject({ kind: "symlink" });
+			expect(await readFile(join(outside, "secret.txt"), "utf-8")).toBe(
+				"TOP SECRET",
+			);
+		});
+	}
 });
 
 describe("createFile never replaces", () => {

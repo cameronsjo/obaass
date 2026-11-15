@@ -1,6 +1,6 @@
 {
   "name": "obaass-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unified MCP server for the OBaaSS stack — vault access, backup history, and plugin integration",
   "type": "module",
   "main": "dist/index.js",

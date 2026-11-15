@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { type Server, request } from "node:http";
 import { join } from "node:path";
+import type { Express } from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Config } from "../src/config.js";
@@ -87,9 +88,9 @@ interface RpcResult {
 }
 
 let vaultPath: string;
-let server: Server;
+let server: Server | undefined;
 let port: number;
-let closeMcp: () => Promise<void>;
+let closeMcp: (() => Promise<void>) | undefined;
 let head: string;
 
 function git(...args: string[]): string {
@@ -98,6 +99,28 @@ function git(...args: string[]): string {
 		["-C", vaultPath, "-c", "user.name=t", "-c", "user.email=t@t", ...args],
 		{ encoding: "utf-8" },
 	).trim();
+}
+
+/** Listen on an ephemeral loopback port and record the server for teardown. */
+async function listen(app: Express): Promise<Server> {
+	const listening = await new Promise<Server>((resolve) => {
+		const s = app.listen(0, "127.0.0.1", () => resolve(s));
+	});
+	server = listening;
+	return listening;
+}
+
+/**
+ * Close whatever the test started. A test that starts no HTTP server leaves
+ * `server` unset; awaiting a close callback that never runs would hang.
+ */
+async function stopServer(): Promise<void> {
+	await closeMcp?.();
+	closeMcp = undefined;
+	const running = server;
+	server = undefined;
+	if (running)
+		await new Promise<void>((resolve) => running.close(() => resolve()));
 }
 
 async function writeNote(rel: string, content: string): Promise<void> {
@@ -160,10 +183,8 @@ async function start(
 	);
 	const { app, close } = createMcpApp(registry, "/mcp", options);
 	closeMcp = close;
-	await new Promise<void>((resolve) => {
-		server = app.listen(0, "127.0.0.1", resolve);
-	});
-	const address = server.address();
+	const listening = await listen(app);
+	const address = listening.address();
 	if (!address || typeof address === "string") throw new Error("no port");
 	port = address.port;
 }
@@ -278,8 +299,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-	await closeMcp?.();
-	await new Promise<void>((resolve) => server?.close(() => resolve()));
+	await stopServer();
 	await cleanupVault(vaultPath);
 	vi.restoreAllMocks();
 });
@@ -323,8 +343,7 @@ describe("tool lists per access", () => {
 			await start({ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } });
 			expect(await listTools(FULL_TOKEN, era)).toEqual(FULL_EXPECTED);
 			expect(await listTools(LIMITED_TOKEN, era)).toEqual(LIMITED_EXPECTED);
-			await closeMcp();
-			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await stopServer();
 			await start({ tokens: {}, anonymous: true });
 			expect(await listTools(undefined, era)).toEqual(ANONYMOUS_EXPECTED);
 		},
@@ -589,8 +608,7 @@ describe("full tier: no writes to hidden paths", () => {
 	});
 
 	it("refuses daily_note when the configured daily folder is hidden", async () => {
-		await closeMcp();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await stopServer();
 		await start(
 			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
 			{ dailyNoteFolder: ".daily" },
@@ -669,8 +687,7 @@ describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 	});
 
 	it("protects a dotted template name under its .md file", async () => {
-		await closeMcp();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await stopServer();
 		await writeNote("Templates/daily.v2.md", "# {{date}}");
 		await start(
 			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
@@ -682,6 +699,28 @@ describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 			LIMITED_TOKEN,
 		);
 		expect(text(res)).toMatch(/protected_path/);
+	});
+
+	it("protects what a symlinked template resolves to, under its own name", async () => {
+		await stopServer();
+		await writeNote("Templates/base.md", "# {{date}}");
+		await symlink(
+			join(vaultPath, "Templates", "base.md"),
+			join(vaultPath, "Templates", "active.md"),
+		);
+		await start(
+			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
+			{ dailyNoteTemplate: "Templates/active" },
+		);
+		const before = await snapshot();
+		const res = await callTool(
+			"append_to_note",
+			{ path: "Templates/base.md", content: "<%* x %>" },
+			LIMITED_TOKEN,
+		);
+		expect(res.body.result?.isError).toBe(true);
+		expect(text(res)).toMatch(/protected_path/);
+		expect(await snapshot()).toBe(before);
 	});
 
 	it("protects an extensionless template setting under its .md name", async () => {
@@ -768,10 +807,8 @@ describe("restricted error text for errors that are not refusals", () => {
 			tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN },
 		});
 		closeMcp = close;
-		await new Promise<void>((resolve) => {
-			server = app.listen(0, "127.0.0.1", resolve);
-		});
-		const address = server.address();
+		const listening = await listen(app);
+		const address = listening.address();
 		if (!address || typeof address === "string") throw new Error("no port");
 		port = address.port;
 		const limited = text(await callTool("read_note", {}, LIMITED_TOKEN));

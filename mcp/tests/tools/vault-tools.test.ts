@@ -1,6 +1,8 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
-import type { ToolDefinition } from "../../src/tools/types.js";
+import type { ToolContext, ToolDefinition } from "../../src/tools/types.js";
 import {
 	VaultToolProvider,
 	insertUnderHeading,
@@ -34,8 +36,9 @@ function getTool(provider: VaultToolProvider, name: string): ToolDefinition {
 async function callTool(
 	tool: ToolDefinition,
 	params: Record<string, unknown>,
+	ctx: ToolContext = { access: "full" },
 ): Promise<string> {
-	const result = await tool.handler(params, { access: "full" });
+	const result = await tool.handler(params, ctx);
 	const block = result.content[0];
 	if (block.type !== "text") throw new Error("expected text content");
 	return block.text;
@@ -566,29 +569,47 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		expect(onDisk).toBe("current content\n\nappended");
 	});
 
-	it("a heading insert refuses when the note changed between read and write", async () => {
+	it("a read-modify-write refuses when an outside writer changed the note mid-update", async () => {
 		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
-		class ChangingVault extends VaultService {
-			override async readFile(path: string): Promise<string> {
-				const content = await super.readFile(path);
-				await writeVaultFile(vaultPath, path, `${content}\nconcurrent edit`);
-				return content;
-			}
-		}
-		const provider = new VaultToolProvider(
-			new ChangingVault(vaultPath),
-			makeConfig(vaultPath),
-		);
+		const vault = new VaultService(vaultPath);
+		// The outside writer (another process, so not queued) lands while the
+		// note is being transformed.
 		await expect(
-			callTool(getTool(provider, "append_to_note"), {
-				path: "note.md",
-				content: "entry",
-				heading: "Log",
+			vault.updateIfUnchanged("note.md", (content) => {
+				writeFileSync(
+					join(vaultPath, "note.md"),
+					`${content}\nconcurrent edit`,
+				);
+				return `${content}\nentry`;
 			}),
 		).rejects.toThrow(/changed/i);
-		expect(await new VaultService(vaultPath).readFile("note.md")).toBe(
+		expect(await vault.readFile("note.md")).toBe(
 			"## Log\n\nfirst\nconcurrent edit",
 		);
+	});
+
+	it("queues concurrent heading inserts and appends to one note across tiers", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const append = getTool(provider, "append_to_note");
+		const calls = Array.from({ length: 24 }, (_, i) =>
+			callTool(
+				append,
+				i % 3 === 0
+					? { path: "note.md", content: `tail-${i}` }
+					: { path: "note.md", content: `entry-${i}`, heading: "Log" },
+				{ access: i % 2 === 0 ? "full" : "limited" },
+			),
+		);
+		const results = await Promise.allSettled(calls);
+		expect(results.filter((r) => r.status === "rejected")).toEqual([]);
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		for (let i = 0; i < 24; i++) {
+			expect(onDisk).toContain(i % 3 === 0 ? `tail-${i}` : `entry-${i}`);
+		}
 	});
 
 	it("a heading insert ignores a heading-shaped line inside the frontmatter", async () => {

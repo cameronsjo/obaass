@@ -1,5 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import {
+	type FileHandle,
 	rename as fsRename,
 	lstat,
 	mkdir,
@@ -41,6 +42,78 @@ const MAX_RECENT_FILES = 500;
 /** True when `p` is `root` or lies below it, compared on a `path.sep` boundary. */
 function isWithin(p: string, root: string): boolean {
 	return p === root || p.startsWith(root + sep);
+}
+
+/**
+ * Refuse a symlink at the final component when a write opens its checked real
+ * target, so a link swapped in after the check is not followed. Undefined on
+ * Windows, where `| undefined` leaves the flags unchanged.
+ */
+const NO_FOLLOW = fsConstants.O_NOFOLLOW;
+
+/**
+ * One queue per real target, shared by every VaultService view (the `full`
+ * view and the restricted one), so a read-modify-write and an append to the
+ * same note never interleave inside this process. Keys are lowercased, which
+ * over-serializes two files differing only by case on a case-sensitive
+ * filesystem and never under-serializes on a case-insensitive one.
+ * debt: in-process only; writers outside this process (Sync, the backup
+ * container) are still caught only by updateIfUnchanged's size/mtime check.
+ */
+const pathQueues = new Map<string, Promise<void>>();
+
+async function withPathLock<T>(
+	realPath: string,
+	fn: () => Promise<T>,
+): Promise<T> {
+	const key = realPath.toLowerCase();
+	const prior = pathQueues.get(key) ?? Promise.resolve();
+	const run = prior.then(fn);
+	const settled = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	pathQueues.set(key, settled);
+	try {
+		return await run;
+	} finally {
+		if (pathQueues.get(key) === settled) pathQueues.delete(key);
+	}
+}
+
+/** Open the checked real target without following a final symlink. */
+async function openNoFollow(realPath: string, flags: number) {
+	try {
+		return await open(realPath, flags | NO_FOLLOW, 0o666);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ELOOP") {
+			throw new AccessRefusal(
+				"Path traversal rejected (the target became a symlink after it was checked).",
+				"symlink",
+			);
+		}
+		throw err;
+	}
+}
+
+/**
+ * Replace a file's content in place from offset 0, then cut it to the new
+ * length. FileHandle.writeFile would start at the handle's current position,
+ * which a prior read has moved to the end.
+ */
+async function overwrite(handle: FileHandle, text: string): Promise<void> {
+	const buf = Buffer.from(text, "utf-8");
+	let offset = 0;
+	while (offset < buf.length) {
+		const { bytesWritten } = await handle.write(
+			buf,
+			offset,
+			buf.length - offset,
+			offset,
+		);
+		offset += bytesWritten;
+	}
+	await handle.truncate(buf.length);
 }
 
 /** Thrown when an exclusive create finds the path already taken. */
@@ -248,6 +321,18 @@ export class VaultService {
 		vaultRelPath: string,
 		intent: Intent = "read",
 	): Promise<string> {
+		return (await this.resolveTarget(vaultRelPath, intent)).lexical;
+	}
+
+	/**
+	 * resolveSafe's walk, returning both the lexical path and the real target
+	 * (every in-vault link on the way resolved). Writes open `real` with
+	 * O_NOFOLLOW, so a link swapped in after this check is refused.
+	 */
+	private async resolveTarget(
+		vaultRelPath: string,
+		intent: Intent,
+	): Promise<{ lexical: string; real: string }> {
 		const resolved = this.resolve(vaultRelPath);
 		const realRoot = await this.getRealVaultPath();
 		const rel = relative(this.vaultPath, resolved);
@@ -292,11 +377,42 @@ export class VaultService {
 			}
 			current = target;
 		}
+		const realTarget = join(current, ...parts.slice(walked));
 		if (this.policy || intent === "write") {
-			const realTarget = join(current, ...parts.slice(walked));
 			this.checkPolicy(relative(realRoot, realTarget), intent);
 		}
-		return resolved;
+		if (this.policy && intent === "write") {
+			await this.checkProtectedTargets(realRoot, realTarget);
+		}
+		return { lexical: resolved, real: realTarget };
+	}
+
+	/**
+	 * A protected path may itself be a link (`Templates/active.md` ->
+	 * `Templates/base.md`); refuse a restricted write that reaches what it
+	 * resolves to, under any name. Resolved per call, because the link can be
+	 * repointed while the server runs. A protected path that does not exist
+	 * yet has no target to protect beyond its own spelling.
+	 */
+	private async checkProtectedTargets(
+		realRoot: string,
+		realTarget: string,
+	): Promise<void> {
+		const target = relative(realRoot, realTarget).toLowerCase();
+		for (const p of this.policy?.protectedPaths ?? []) {
+			let protectedReal: string;
+			try {
+				protectedReal = await realpath(join(realRoot, normalize(p)));
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code === "ENOENT" || code === "ENOTDIR") continue;
+				// Unresolvable for another reason: fail closed for the write.
+				throw policyRefusal("protected_path");
+			}
+			if (relative(realRoot, protectedReal).toLowerCase() === target) {
+				throw policyRefusal("protected_path");
+			}
+		}
 	}
 
 	/** Read a file's content. */
@@ -310,9 +426,19 @@ export class VaultService {
 	 */
 	async writeFile(path: string, content: string): Promise<void> {
 		this.refuseWriteOperation();
-		const absPath = await this.resolveSafe(path, "write");
-		await mkdir(dirname(absPath), { recursive: true });
-		await writeFile(absPath, content, "utf-8");
+		const { real } = await this.resolveTarget(path, "write");
+		await mkdir(dirname(real), { recursive: true });
+		await withPathLock(real, async () => {
+			const handle = await openNoFollow(
+				real,
+				fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+			);
+			try {
+				await handle.writeFile(content, "utf-8");
+			} finally {
+				await handle.close();
+			}
+		});
 	}
 
 	/**
@@ -336,39 +462,52 @@ export class VaultService {
 	/**
 	 * Append to the end of an existing file with O_APPEND, so a concurrent writer's
 	 * bytes are kept rather than overwritten by a stale read. Never creates.
+	 * Queued with updateIfUnchanged on the same note, so an in-process update
+	 * cannot write back a snapshot taken before this append.
 	 */
 	async appendFile(path: string, content: string): Promise<void> {
-		const absPath = await this.resolveSafe(path, "write");
-		const handle = await open(
-			absPath,
-			fsConstants.O_WRONLY | fsConstants.O_APPEND,
-		);
-		try {
-			await handle.writeFile(content, "utf-8");
-		} finally {
-			await handle.close();
-		}
+		const { real } = await this.resolveTarget(path, "write");
+		await withPathLock(real, async () => {
+			const handle = await openNoFollow(
+				real,
+				fsConstants.O_WRONLY | fsConstants.O_APPEND,
+			);
+			try {
+				await handle.writeFile(content, "utf-8");
+			} finally {
+				await handle.close();
+			}
+		});
 	}
 
 	/**
-	 * Read, transform, and write back a file, refusing when its size or mtime
-	 * changed while it was being read and transformed (a concurrent edit would
-	 * be lost). A write that lands after the second stat is not detected.
+	 * Read, transform, and write back a file through one no-follow handle, so the
+	 * read and the write reach the same file. In-process callers on the same note
+	 * are queued (withPathLock). An outside writer is caught when its write
+	 * changes the size or mtime while the note is read and transformed; a write
+	 * that lands after the second stat is not detected.
 	 */
 	async updateIfUnchanged(
 		path: string,
 		transform: (content: string) => string,
 	): Promise<void> {
-		const absPath = await this.resolveSafe(path, "write");
-		const before = await stat(absPath);
-		const updated = transform(await this.readFile(path));
-		const after = await stat(absPath);
-		if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
-			throw new ConcurrentModificationError(
-				"The note changed while it was being updated; retry the call.",
-			);
-		}
-		await writeFile(absPath, updated, "utf-8");
+		const { real } = await this.resolveTarget(path, "write");
+		await withPathLock(real, async () => {
+			const handle = await openNoFollow(real, fsConstants.O_RDWR);
+			try {
+				const before = await handle.stat();
+				const updated = transform(await handle.readFile("utf-8"));
+				const after = await handle.stat();
+				if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+					throw new ConcurrentModificationError(
+						"The note changed while it was being updated; retry the call.",
+					);
+				}
+				await overwrite(handle, updated);
+			} finally {
+				await handle.close();
+			}
+		});
 	}
 
 	/** Delete a file. Refused under a path policy. */

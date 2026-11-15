@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-15)
+
 - Added: access tiers bound to the bearer token. `MCP_AUTH_TOKEN` keeps the `full` tier (every tool). The new `MCP_AUTH_TOKEN_LIMITED` selects `limited`: the read tools, literal-text search, `create_note` for new notes only, `append_to_note`, and `daily_note`. A tool outside the caller's tier is not registered, so it is absent from `tools/list` and refused on `tools/call`. `limited` cannot use dot paths, and it writes only `.md` files, never an agent instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, or variants such as `CLAUDE.local.md`) or the daily-note template. It is capped at 120 JSON-RPC messages per minute, with every message in a batch counted. See the README's "Access tiers" section and `docs/runbooks/rotate-mcp-tokens.md`.
 - Added: `MCP_LIMITED_WRITE_DIRS`, an optional comma-separated list of vault-relative folders the `limited` tier may write under. Unset keeps writes vault-wide.
 - Added: audit fields. Every dispatch line carries `tier` and a server-assigned `requestId`, plus `upstreamRequestId` from `MCP_UPSTREAM_REQUEST_ID_HEADER` (default `x-request-id`) when well formed. Refusals log once per tool and kind per minute with a count. Startup logs a fingerprint per configured token.
@@ -19,6 +21,9 @@
 - Fixed: `backup_restore` with `path: "*"` restored every file in the vault. Git now treats every path argument literally.
 - Fixed: two regular expressions a `limited` caller could feed its own text backtracked quadratically, stalling the server for every tier. One was the heading match in `append_to_note` (a whitespace-only `heading` on a long line of spaces: about 30 s at 100 KB). The other was the wikilink scan behind `file_metadata` and `rename` (a note of `[` characters). Both are now linear, and a whitespace-only `heading` is refused.
 - Fixed: `append_to_note` rewrote the whole note from a stale read, losing a concurrent edit. A tail append now uses `O_APPEND`, and a heading insert refuses when the note changed. A heading-shaped line inside frontmatter is no longer an insert target.
+- Fixed: two in-process writes to one note could still interleave: a heading insert and a second insert or a tail append both passed the change check, and the later write dropped the other's text. Every write to a note now queues behind the others on the same file, across tiers.
+- Fixed: a write opened its target by name after the path check, so a symlink swapped in between could redirect it to `.git/config` or outside the vault. Writes now open the checked real target with `O_NOFOLLOW` and refuse a link that appeared after the check.
+- Fixed: when `DAILY_NOTE_TEMPLATE` named a symlink, `limited` could still write the file it pointed to under that file's own name. The resolved target is now protected too.
 
 - Changed: the image workflow pins every third-party action to a full commit
   SHA, with the release version in a trailing comment, so a re-pointed upstream
