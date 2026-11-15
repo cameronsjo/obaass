@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
@@ -586,6 +586,20 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		expect(await vault.readFile("note.md")).toBe(
 			"## Log\n\nfirst\nconcurrent edit",
 		);
+	});
+
+	it("a read-modify-write refuses when an editor replaced the note by rename", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		const vault = new VaultService(vaultPath);
+		await expect(
+			vault.updateIfUnchanged("note.md", (content) => {
+				// An atomic save: same size and a fresh inode at the same path.
+				writeFileSync(join(vaultPath, "note.tmp"), "## Log\n\nFIRST");
+				renameSync(join(vaultPath, "note.tmp"), join(vaultPath, "note.md"));
+				return `${content}\nentry`;
+			}),
+		).rejects.toThrow(/changed/i);
+		expect(await vault.readFile("note.md")).toBe("## Log\n\nFIRST");
 	});
 
 	it("a read-modify-write that shrinks the note leaves no stale tail", async () => {

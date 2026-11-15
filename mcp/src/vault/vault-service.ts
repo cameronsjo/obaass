@@ -545,9 +545,9 @@ export class VaultService {
 	/**
 	 * Read, transform, and write back a file through one no-follow handle, so the
 	 * read and the write reach the same file. In-process callers on the same note
-	 * are queued (withPathLock). An outside writer is caught when its write
-	 * changes the size or mtime while the note is read and transformed; a write
-	 * that lands after the second stat is not detected.
+	 * are queued (withPathLock). An outside writer is caught when, while the note
+	 * is read and transformed, it changes the size or mtime or replaces the file
+	 * (a save by rename); a write that lands after the final check is not detected.
 	 */
 	async updateIfUnchanged(
 		path: string,
@@ -560,7 +560,18 @@ export class VaultService {
 				const before = await handle.stat();
 				const updated = transform(await handle.readFile("utf-8"));
 				const after = await handle.stat();
-				if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+				// The handle pins the inode it opened; an editor that saves by
+				// rename leaves it detached, so the path must still name it.
+				const current = await lstat(real).catch((err: unknown) => {
+					if (isMissing(err)) return undefined;
+					throw err;
+				});
+				if (
+					after.size !== before.size ||
+					after.mtimeMs !== before.mtimeMs ||
+					current?.ino !== after.ino ||
+					current.dev !== after.dev
+				) {
 					throw new ConcurrentModificationError(
 						"The note changed while it was being updated; retry the call.",
 					);
