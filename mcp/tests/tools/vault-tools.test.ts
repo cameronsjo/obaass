@@ -588,6 +588,17 @@ describe("VaultToolProvider — write integrity (create, append, daily_note)", (
 		);
 	});
 
+	it("a read-modify-write that shrinks the note leaves no stale tail", async () => {
+		await writeVaultFile(
+			vaultPath,
+			"note.md",
+			"a long first version of the note",
+		);
+		const vault = new VaultService(vaultPath);
+		await vault.updateIfUnchanged("note.md", () => "short");
+		expect(await vault.readFile("note.md")).toBe("short");
+	});
+
 	it("queues concurrent heading inserts and appends to one note across tiers", async () => {
 		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
 		const provider = new VaultToolProvider(

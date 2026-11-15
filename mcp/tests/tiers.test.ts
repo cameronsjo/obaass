@@ -723,6 +723,60 @@ describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 		expect(await snapshot()).toBe(before);
 	});
 
+	/** Restart with `template` configured, try one limited write, and expect it refused. */
+	async function expectTemplateGuard(
+		template: string,
+		tool: "create_note" | "append_to_note",
+		path: string,
+	): Promise<void> {
+		await stopServer();
+		await start(
+			{ tokens: { full: FULL_TOKEN, limited: LIMITED_TOKEN } },
+			{ dailyNoteTemplate: template },
+		);
+		const before = await snapshot();
+		const res = await callTool(
+			tool,
+			{ path, content: "<%* evil %>" },
+			LIMITED_TOKEN,
+		);
+		expect(res.body.result?.isError, text(res)).toBe(true);
+		expect(text(res)).toMatch(/protected_path/);
+		expect(await snapshot()).toBe(before);
+	}
+
+	it("protects the not-yet-created target of a dangling template link", async () => {
+		await mkdir(join(vaultPath, "Templates"), { recursive: true });
+		await symlink(
+			join(vaultPath, "Templates", "future.md"),
+			join(vaultPath, "Templates", "pending.md"),
+		);
+		await expectTemplateGuard(
+			"Templates/pending",
+			"create_note",
+			"Templates/future.md",
+		);
+	});
+
+	it("protects a not-yet-created template under a linked folder", async () => {
+		await mkdir(join(vaultPath, "TplReal"));
+		await symlink(join(vaultPath, "TplReal"), join(vaultPath, "Tpl"));
+		await expectTemplateGuard("Tpl/daily", "create_note", "TplReal/daily.md");
+	});
+
+	it("refuses limited writes while the template path cannot be resolved", async () => {
+		await mkdir(join(vaultPath, "Templates"), { recursive: true });
+		await symlink(
+			join(vaultPath, "Templates", "loop-b.md"),
+			join(vaultPath, "Templates", "loop-a.md"),
+		);
+		await symlink(
+			join(vaultPath, "Templates", "loop-a.md"),
+			join(vaultPath, "Templates", "loop-b.md"),
+		);
+		await expectTemplateGuard("Templates/loop-a", "create_note", "notes/x.md");
+	});
+
 	it("protects an extensionless template setting under its .md name", async () => {
 		const res = await callTool(
 			"append_to_note",

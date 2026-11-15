@@ -2,7 +2,7 @@
 
 How to replace `MCP_AUTH_TOKEN` (`full`) or `MCP_AUTH_TOKEN_LIMITED` (`limited`) on the `mcp/` service, confirm which token a running server loaded, and roll back to an image from before access tiers.
 
-The server holds one token per tier and reads them only at startup. A rotation is therefore a restart. Between the restart and the moment the client holding that tier's token is updated, that client gets HTTP 401. No overlap window exists.
+The server holds one token per tier and reads them only at startup. A rotation therefore means recreating the service. Between the recreate and the moment the client holding that tier's token is updated, that client gets HTTP 401. No overlap window exists.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ Rotate one tier at a time, `limited` first when both are due, in a window when a
 
 4. Recreate the service so it starts with the new environment, then update the client that holds this tier's token right away. A plain restart of an existing container keeps the environment it was created with; the client then sends the new token and gets 401. With Compose, `docker compose up -d` recreates a service whose environment changed; `docker restart` does not.
 
-5. Confirm the server loaded the new token. Find the `Starting obaass-mcp` line in the service log. Its `tokenFingerprints` field lists `{tier, fingerprint}` per configured token. The entry for the rotated tier must equal the value from step 3. A mismatch means the service read a stale environment, so fix the environment and restart again.
+5. Confirm the server loaded the new token. Find the `Starting obaass-mcp` line in the service log. Its `tokenFingerprints` field lists `{tier, fingerprint}` per configured token. The entry for the rotated tier must equal the value from step 3. A mismatch means the service read a stale environment, so fix the environment and recreate the service again.
 
 6. Confirm the client works: a `tools/list` with the new token returns HTTP 200, and one with the old token returns 401.
 

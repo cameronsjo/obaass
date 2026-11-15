@@ -7,6 +7,7 @@ import {
 	open,
 	readFile,
 	readdir,
+	readlink,
 	realpath,
 	stat,
 	unlink,
@@ -20,6 +21,7 @@ import {
 	join,
 	normalize,
 	relative,
+	resolve as resolvePath,
 	sep,
 } from "node:path";
 import { escapeRegex } from "../util.js";
@@ -114,6 +116,45 @@ async function overwrite(handle: FileHandle, text: string): Promise<void> {
 		offset += bytesWritten;
 	}
 	await handle.truncate(buf.length);
+}
+
+/** Symlink hops prospectiveRealPath follows before refusing, as the kernel does (ELOOP). */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Where a path resolves, or would resolve once created: the real path when it
+ * exists; otherwise a dangling final link is followed to its target, and a
+ * missing name is joined onto its parent's prospective real path. Throws on
+ * any error other than ENOENT/ENOTDIR, and after MAX_LINK_HOPS links.
+ */
+async function prospectiveRealPath(p: string, hops = 0): Promise<string> {
+	if (hops > MAX_LINK_HOPS) {
+		throw new Error(`More than ${MAX_LINK_HOPS} symlink hops.`);
+	}
+	try {
+		return await realpath(p);
+	} catch (err) {
+		if (!isMissing(err)) throw err;
+	}
+	let isLink: boolean;
+	try {
+		isLink = (await lstat(p)).isSymbolicLink();
+	} catch (err) {
+		if (!isMissing(err)) throw err;
+		const parent = dirname(p);
+		if (parent === p) return p;
+		return join(await prospectiveRealPath(parent, hops), basename(p));
+	}
+	if (!isLink) return p;
+	return prospectiveRealPath(
+		resolvePath(dirname(p), await readlink(p)),
+		hops + 1,
+	);
+}
+
+function isMissing(err: unknown): boolean {
+	const code = (err as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /** Thrown when an exclusive create finds the path already taken. */
@@ -327,7 +368,8 @@ export class VaultService {
 	/**
 	 * resolveSafe's walk, returning both the lexical path and the real target
 	 * (every in-vault link on the way resolved). Writes open `real` with
-	 * O_NOFOLLOW, so a link swapped in after this check is refused.
+	 * O_NOFOLLOW, which refuses a link swapped in at the final component after
+	 * this check; a swap of a parent folder is not covered.
 	 */
 	private async resolveTarget(
 		vaultRelPath: string,
@@ -389,10 +431,12 @@ export class VaultService {
 
 	/**
 	 * A protected path may itself be a link (`Templates/active.md` ->
-	 * `Templates/base.md`); refuse a restricted write that reaches what it
-	 * resolves to, under any name. Resolved per call, because the link can be
-	 * repointed while the server runs. A protected path that does not exist
-	 * yet has no target to protect beyond its own spelling.
+	 * `Templates/base.md`), or sit under a linked folder; refuse a restricted
+	 * write that reaches the file it resolves to, under any name. That file
+	 * need not exist yet: a dangling template link, or a template under a linked
+	 * folder, still names the file `daily_note` would read once it is created.
+	 * Resolved per call, because a link can be repointed while the server runs.
+	 * Hard links are not compared; making one needs filesystem access, not a tool.
 	 */
 	private async checkProtectedTargets(
 		realRoot: string,
@@ -402,11 +446,10 @@ export class VaultService {
 		for (const p of this.policy?.protectedPaths ?? []) {
 			let protectedReal: string;
 			try {
-				protectedReal = await realpath(join(realRoot, normalize(p)));
-			} catch (err) {
-				const code = (err as NodeJS.ErrnoException).code;
-				if (code === "ENOENT" || code === "ENOTDIR") continue;
-				// Unresolvable for another reason: fail closed for the write.
+				protectedReal = await prospectiveRealPath(join(realRoot, normalize(p)));
+			} catch {
+				// A symlink loop, a permission error, or too many hops: the template's
+				// file cannot be told apart from this one, so refuse the write.
 				throw policyRefusal("protected_path");
 			}
 			if (relative(realRoot, protectedReal).toLowerCase() === target) {

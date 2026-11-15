@@ -9,7 +9,7 @@ export class PluginClient {
 	private connected = false;
 
 	constructor(private pluginUrl: string) {
-		this.client = new Client({ name: "obaass-mcp", version: "0.1.0" });
+		this.client = new Client({ name: "obaass-mcp", version: "0.2.0" });
 	}
 
 	async connect(): Promise<void> {
