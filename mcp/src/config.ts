@@ -1,6 +1,52 @@
 import { statSync } from "node:fs";
 import { z } from "zod";
-import { MIN_AUTH_TOKEN_LENGTH, resolveAccessPolicy } from "./auth.js";
+import {
+	MIN_AUTH_TOKEN_LENGTH,
+	resolveAccessPolicy,
+	tokensMatch,
+} from "./auth.js";
+import type { TierTokens } from "./tools/tiers.js";
+
+/**
+ * MCP_LIMITED_WRITE_DIRS: comma-separated vault-relative folders the limited
+ * tier may write under. Unset or empty means no folder restriction.
+ */
+function parseWriteDirs(value: string | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	const dirs = value
+		.split(",")
+		.map((d) => d.trim().replace(/^\.\//, "").replace(/\/+$/, ""))
+		.filter((d) => d !== "");
+	for (const dir of dirs) {
+		const segments = dir.split("/");
+		if (
+			dir.startsWith("/") ||
+			segments.some((s) => s === "" || s === ".." || s.startsWith("."))
+		) {
+			throw new Error(
+				`MCP_LIMITED_WRITE_DIRS entries must be vault-relative folders without "..", empty, or dot segments; got an invalid entry of ${dir.length} characters`,
+			);
+		}
+	}
+	if (dirs.length === 0 && value.trim() !== "") {
+		// A value that names nothing must not silently mean "no restriction".
+		throw new Error(
+			"MCP_LIMITED_WRITE_DIRS is set but names no folder; unset it for vault-wide writes or list folders such as Inbox,Claude/Notes",
+		);
+	}
+	return dirs.length > 0 ? dirs : undefined;
+}
+
+function tokenSchema(variable: string) {
+	return z
+		.string()
+		.min(
+			MIN_AUTH_TOKEN_LENGTH,
+			`${variable} must be at least ${MIN_AUTH_TOKEN_LENGTH} characters (generate one with \`openssl rand -hex 32\`)`,
+		)
+		.regex(/^\S+$/, `${variable} must not contain whitespace`)
+		.optional();
+}
 
 const configSchema = z.object({
 	vaultPath: z.string().min(1, "VAULT_PATH is required"),
@@ -22,14 +68,20 @@ const configSchema = z.object({
 	pluginMcpUrl: z.string().url().optional(),
 	dailyNoteFolder: z.string().optional(),
 	dailyNoteTemplate: z.string().optional(),
-	authToken: z
+	limitedWriteDirs: z
 		.string()
-		.min(
-			MIN_AUTH_TOKEN_LENGTH,
-			`MCP_AUTH_TOKEN must be at least ${MIN_AUTH_TOKEN_LENGTH} characters`,
+		.optional()
+		.transform((value) => parseWriteDirs(value)),
+	authToken: tokenSchema("MCP_AUTH_TOKEN"),
+	limitedAuthToken: tokenSchema("MCP_AUTH_TOKEN_LIMITED"),
+	upstreamRequestIdHeader: z
+		.string()
+		.regex(
+			/^[A-Za-z0-9-]{1,64}$/,
+			"MCP_UPSTREAM_REQUEST_ID_HEADER must be an HTTP header name",
 		)
-		.regex(/^\S+$/, "MCP_AUTH_TOKEN must not contain whitespace")
-		.optional(),
+		.default("x-request-id")
+		.transform((name) => name.toLowerCase()),
 	allowUnauthenticated: z
 		.enum(["true", "false"], {
 			error: 'MCP_ALLOW_UNAUTHENTICATED must be "true" or "false"',
@@ -39,8 +91,8 @@ const configSchema = z.object({
 });
 
 export type Config = z.infer<typeof configSchema> & {
-	/** Only tools marked `readOnly` are served (unauthenticated opt-out). */
-	readOnly: boolean;
+	/** No token is configured and the unauthenticated opt-out is on: serve the anonymous set. */
+	anonymous: boolean;
 	/** Startup warning for a weaker-than-recommended access policy. */
 	accessWarning: string | undefined;
 };
@@ -56,7 +108,11 @@ export function loadConfig(): Config {
 		pluginMcpUrl: process.env.PLUGIN_MCP_URL || undefined,
 		dailyNoteFolder: process.env.DAILY_NOTE_FOLDER || undefined,
 		dailyNoteTemplate: process.env.DAILY_NOTE_TEMPLATE || undefined,
+		limitedWriteDirs: process.env.MCP_LIMITED_WRITE_DIRS || undefined,
 		authToken: process.env.MCP_AUTH_TOKEN || undefined,
+		limitedAuthToken: process.env.MCP_AUTH_TOKEN_LIMITED || undefined,
+		upstreamRequestIdHeader:
+			process.env.MCP_UPSTREAM_REQUEST_ID_HEADER || undefined,
 		allowUnauthenticated: process.env.MCP_ALLOW_UNAUTHENTICATED || undefined,
 	});
 
@@ -64,14 +120,25 @@ export function loadConfig(): Config {
 	// than every tool call failing later with an opaque ENOENT.
 	assertVaultPathUsable(parsed.vaultPath);
 
-	// Refuses to start when write tools would be reachable off loopback unauthenticated.
+	if (
+		parsed.authToken &&
+		parsed.limitedAuthToken &&
+		tokensMatch(parsed.authToken, parsed.limitedAuthToken)
+	) {
+		throw new Error(
+			"MCP_AUTH_TOKEN_LIMITED must differ from MCP_AUTH_TOKEN. Generate a separate value for each with `openssl rand -hex 32`.",
+		);
+	}
+
+	// Refuses to start when tools beyond the anonymous read set would be reachable
+	// off loopback without a token.
 	const access = resolveAccessPolicy({
 		...parsed,
 		hasAllowedHosts: !!process.env.MCP_ALLOWED_HOSTS?.trim(),
 	});
 	return {
 		...parsed,
-		readOnly: access.readOnly,
+		anonymous: access.anonymous,
 		accessWarning: access.warning,
 	};
 }
@@ -92,4 +159,9 @@ function assertVaultPathUsable(vaultPath: string): void {
 	if (!stats.isDirectory()) {
 		throw new Error(`VAULT_PATH is not a directory: ${vaultPath}`);
 	}
+}
+
+/** The token table the bearer middleware and health check read. */
+export function configuredTokens(config: Config): TierTokens {
+	return { full: config.authToken, limited: config.limitedAuthToken };
 }

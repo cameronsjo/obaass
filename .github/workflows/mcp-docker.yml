@@ -186,3 +186,23 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
+
+      # The pinnable digest and its tags, from this run's own create step, so a
+      # hand-off never reads a digest back through a tag another run may move.
+      # scripts/release-handoff.sh verifies the same digest independently.
+      - name: Record digest in the job summary
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Published image"
+            echo
+            echo "Pin: \`${IMAGE}@${DIGEST}\`"
+            echo
+            echo "Tags:"
+            while IFS= read -r tag; do
+              if [ -n "${tag}" ]; then echo "- \`${tag}\`"; fi
+            done <<< "${TAGS}"
+          } >> "${GITHUB_STEP_SUMMARY}"

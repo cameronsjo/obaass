@@ -81,7 +81,7 @@ describe("/health with a configured token", () => {
 	it("gives everyone status only in unauthenticated read-only mode", async () => {
 		const { body } = await probe(undefined, vaultPath, {
 			authToken: undefined,
-			readOnly: true,
+			anonymous: true,
 		});
 		expect(body).toEqual({ status: "ok", name: "obaass-mcp" });
 		expect(listMarkdownFiles).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe("/health with a configured token", () => {
 	it("keeps the full report on a tokenless loopback bind", async () => {
 		const { body } = await probe(undefined, vaultPath, {
 			authToken: undefined,
-			readOnly: false,
+			anonymous: false,
 		});
 		expect(body).toMatchObject({ vault: { path: vaultPath } });
 	});

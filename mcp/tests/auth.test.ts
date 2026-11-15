@@ -17,7 +17,7 @@ import { BackupToolProvider } from "../src/tools/backup-tools.js";
 import { ToolRegistry } from "../src/tools/index.js";
 import { PluginToolProvider } from "../src/tools/plugin-tools.js";
 import { VaultToolProvider } from "../src/tools/vault-tools.js";
-import type { VaultService } from "../src/vault/vault-service.js";
+import { VaultService } from "../src/vault/vault-service.js";
 
 const TOKEN = "t".repeat(MIN_AUTH_TOKEN_LENGTH);
 
@@ -47,7 +47,7 @@ describe("resolveAccessPolicy", () => {
 
 	it("leaves a loopback bind with no token open, with write tools", () => {
 		expect(resolveAccessPolicy({ ...base, httpHost: "127.0.0.1" })).toEqual({
-			readOnly: false,
+			anonymous: false,
 			warning: undefined,
 		});
 	});
@@ -61,7 +61,7 @@ describe("resolveAccessPolicy", () => {
 						hasAllowedHosts,
 						authToken: TOKEN,
 					}),
-				).toEqual({ readOnly: false, warning: undefined });
+				).toEqual({ anonymous: false, warning: undefined });
 			}
 		}
 	});
@@ -79,45 +79,56 @@ describe("resolveAccessPolicy", () => {
 			}),
 		).toThrow(/MCP_ALLOWED_HOSTS.*MCP_AUTH_TOKEN/s);
 	});
-	it("starts read-only with a warning when the operator opts out", () => {
+	it("allows any bind when only the limited token is set", () => {
+		expect(
+			resolveAccessPolicy({
+				...base,
+				httpHost: "0.0.0.0",
+				limitedAuthToken: TOKEN,
+			}),
+		).toEqual({ anonymous: false, warning: undefined });
+	});
+	it("serves the anonymous set with a warning when the operator opts out", () => {
 		const policy = resolveAccessPolicy({
 			...base,
 			httpHost: "0.0.0.0",
 			allowUnauthenticated: true,
 		});
-		expect(policy.readOnly).toBe(true);
-		expect(policy.warning).toMatch(/read-only/);
+		expect(policy.anonymous).toBe(true);
+		expect(policy.warning).toMatch(/anonymous read tools/);
 	});
 });
 
-describe("read-only tool classification", () => {
-	it("serves exactly the non-mutating tools in read-only mode", () => {
+describe("anonymous access is an allowlist, not the readOnly flag", () => {
+	it("serves exactly the anonymous read set, withholding readOnly-marked backup and plugin tools", () => {
 		const registry = new ToolRegistry();
 		const config = { vaultPath: "/vault" } as Config;
-		registry.register(new VaultToolProvider({} as VaultService, config));
+		registry.register(
+			new VaultToolProvider(new VaultService("/vault"), config),
+		);
 		registry.register(new BackupToolProvider({} as BackupClient, "/vault"));
 		registry.register(new PluginToolProvider({} as PluginClient));
-		const served = registry.getServedTools(true).map((t) => t.name);
-		const withheld = registry
-			.getAllTools()
+		const served = registry
+			.getServedTools("anonymous")
 			.map((t) => t.name)
-			.filter((name) => !served.includes(name));
-		expect(withheld.sort()).toEqual(
+			.sort();
+		expect(served).toEqual(
 			[
-				"append_to_note",
-				"backup_restore",
-				"create_note",
-				"daily_note",
-				"delete",
-				"delete_note",
-				"rename",
-				"run_dataview_query",
-				"set_frontmatter",
+				"file_metadata",
+				"get_instructions",
+				"read_note",
+				"recent_files",
+				"search_by_property",
+				"search_by_tag",
+				"search_content",
+				"vault_structure",
+				"vault_tags",
 			].sort(),
 		);
-		expect(registry.getServedTools(false)).toHaveLength(
+		expect(registry.getServedTools("full")).toHaveLength(
 			registry.getAllTools().length,
 		);
+		expect(registry.getServedTools(undefined)).toHaveLength(0);
 	});
 });
 
@@ -255,7 +266,7 @@ describe("MCP bearer auth and read-only mode over real HTTP", () => {
 	});
 
 	describe("with a token", () => {
-		beforeEach(() => start({ authToken: TOKEN }));
+		beforeEach(() => start({ tokens: { full: TOKEN } }));
 
 		it("dispatches a write tool with the correct bearer token", async () => {
 			const res = await callTool("write", { Authorization: `Bearer ${TOKEN}` });
@@ -322,18 +333,20 @@ describe("MCP bearer auth and read-only mode over real HTTP", () => {
 		});
 	});
 
-	describe("read-only (unauthenticated opt-out)", () => {
-		beforeEach(() => start({ readOnly: true }));
+	describe("anonymous (unauthenticated opt-out)", () => {
+		beforeEach(() => start({ anonymous: true }));
 
-		it("still serves read-only tools", async () => {
+		it("does not serve a tool only because it is marked readOnly", async () => {
 			const res = await callTool("echo");
-			expect(res.status).toBe(200);
-			expect(echo).toHaveBeenCalledOnce();
+			expect(JSON.parse(res.body)).toMatchObject({
+				error: { code: -32601, message: "Method not found" },
+			});
+			expect(echo).not.toHaveBeenCalled();
 		});
 		it("does not expose tools that are not marked read-only", async () => {
 			const res = await callTool("write");
 			expect(JSON.parse(res.body)).toMatchObject({
-				error: { code: -32602, message: "Tool write not found" },
+				error: { code: -32601, message: "Method not found" },
 			});
 			expect(write).not.toHaveBeenCalled();
 		});
@@ -345,7 +358,7 @@ describe("bearer rejection logging", () => {
 		const { logger } = await import("../src/logger.js");
 		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 		let clock = 0;
-		const middleware = bearerAuthMiddleware(TOKEN, () => clock);
+		const middleware = bearerAuthMiddleware({ full: TOKEN }, () => clock);
 		const res = {
 			status: () => res,
 			set: () => res,

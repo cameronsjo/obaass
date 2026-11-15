@@ -60,7 +60,10 @@ describe("PluginClient with the v2 SDK over real HTTP", () => {
 		expect(await plugin.callTool("echo", { message: "hello" })).toBe(
 			"plugin:hello",
 		);
-		expect(calls).toHaveBeenCalledWith({ message: "hello" });
+		expect(calls).toHaveBeenCalledWith(
+			{ message: "hello" },
+			{ access: "full" },
+		);
 		expect(methods.filter((method) => method === "initialize")).toHaveLength(1);
 		expect(methods).toContain("tools/list");
 		expect(methods).toContain("tools/call");

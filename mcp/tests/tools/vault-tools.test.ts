@@ -1,7 +1,13 @@
+import { renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
-import type { ToolDefinition } from "../../src/tools/types.js";
-import { VaultToolProvider } from "../../src/tools/vault-tools.js";
+import type { ToolContext, ToolDefinition } from "../../src/tools/types.js";
+import {
+	VaultToolProvider,
+	insertUnderHeading,
+	templateSpellings,
+} from "../../src/tools/vault-tools.js";
 import { VaultService } from "../../src/vault/vault-service.js";
 import { cleanupVault, makeTempVault, writeVaultFile } from "../helpers.js";
 
@@ -30,8 +36,9 @@ function getTool(provider: VaultToolProvider, name: string): ToolDefinition {
 async function callTool(
 	tool: ToolDefinition,
 	params: Record<string, unknown>,
+	ctx: ToolContext = { access: "full" },
 ): Promise<string> {
-	const result = await tool.handler(params);
+	const result = await tool.handler(params, ctx);
 	const block = result.content[0];
 	if (block.type !== "text") throw new Error("expected text content");
 	return block.text;
@@ -482,5 +489,251 @@ describe("VaultToolProvider — instruction and daily-note fallback branches", (
 			content.indexOf("## Second"),
 		);
 		expect(content).toContain("## Second\nkeep me");
+	});
+});
+
+describe("VaultToolProvider — write integrity (create, append, daily_note)", () => {
+	let vaultPath: string;
+
+	beforeEach(async () => {
+		vaultPath = await makeTempVault();
+	});
+
+	afterEach(async () => {
+		await cleanupVault(vaultPath);
+	});
+
+	it("create_note without overwrite never replaces a file that appears just before the write", async () => {
+		// Simulates a concurrent writer: the note appears immediately before the
+		// exclusive create opens it. The create must not replace it.
+		class RacingVault extends VaultService {
+			override async createFile(path: string, content: string): Promise<void> {
+				await writeVaultFile(vaultPath, path, "written by another client");
+				return super.createFile(path, content);
+			}
+		}
+		const provider = new VaultToolProvider(
+			new RacingVault(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const text = await callTool(getTool(provider, "create_note"), {
+			path: "race.md",
+			content: "clobber",
+		});
+		expect(text).toMatch(/already exists/i);
+		expect(await new VaultService(vaultPath).readFile("race.md")).toBe(
+			"written by another client",
+		);
+	});
+
+	it("daily_note's schema refuses a date that is not YYYY-MM-DD", () => {
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const schema = getTool(provider, "daily_note").inputSchema;
+		for (const date of ["../Inbox/x", "2026-01-15/../../x", "2026-1-5", ""]) {
+			expect(schema.safeParse({ date }).success).toBe(false);
+		}
+		expect(schema.safeParse({ date: "2026-01-15" }).success).toBe(true);
+	});
+
+	it("daily_note's handler refuses a traversal date even when the schema is bypassed", async () => {
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await expect(
+			callTool(getTool(provider, "daily_note"), { date: "../Inbox/x" }),
+		).rejects.toThrow(/YYYY-MM-DD/);
+		expect(await new VaultService(vaultPath).exists("Inbox/x.md")).toBe(false);
+	});
+
+	it("a tail append keeps content another writer added after the note was read", async () => {
+		// A stale read must not be written back over the file.
+		class StaleReadVault extends VaultService {
+			override async readFile(): Promise<string> {
+				return "stale snapshot";
+			}
+		}
+		await writeVaultFile(vaultPath, "note.md", "current content");
+		const provider = new VaultToolProvider(
+			new StaleReadVault(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await callTool(getTool(provider, "append_to_note"), {
+			path: "note.md",
+			content: "appended",
+		});
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		expect(onDisk).toBe("current content\n\nappended");
+	});
+
+	it("a read-modify-write refuses when an outside writer changed the note mid-update", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		const vault = new VaultService(vaultPath);
+		// The outside writer (another process, so not queued) lands while the
+		// note is being transformed.
+		await expect(
+			vault.updateIfUnchanged("note.md", (content) => {
+				writeFileSync(
+					join(vaultPath, "note.md"),
+					`${content}\nconcurrent edit`,
+				);
+				return `${content}\nentry`;
+			}),
+		).rejects.toThrow(/changed/i);
+		expect(await vault.readFile("note.md")).toBe(
+			"## Log\n\nfirst\nconcurrent edit",
+		);
+	});
+
+	it("a read-modify-write refuses when an editor replaced the note by rename", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		const vault = new VaultService(vaultPath);
+		await expect(
+			vault.updateIfUnchanged("note.md", (content) => {
+				// An atomic save: same size and a fresh inode at the same path.
+				writeFileSync(join(vaultPath, "note.tmp"), "## Log\n\nFIRST");
+				renameSync(join(vaultPath, "note.tmp"), join(vaultPath, "note.md"));
+				return `${content}\nentry`;
+			}),
+		).rejects.toThrow(/changed/i);
+		expect(await vault.readFile("note.md")).toBe("## Log\n\nFIRST");
+	});
+
+	it("a read-modify-write that shrinks the note leaves no stale tail", async () => {
+		await writeVaultFile(
+			vaultPath,
+			"note.md",
+			"a long first version of the note",
+		);
+		const vault = new VaultService(vaultPath);
+		await vault.updateIfUnchanged("note.md", () => "short");
+		expect(await vault.readFile("note.md")).toBe("short");
+	});
+
+	it("queues concurrent heading inserts and appends to one note across tiers", async () => {
+		await writeVaultFile(vaultPath, "note.md", "## Log\n\nfirst");
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		const append = getTool(provider, "append_to_note");
+		const calls = Array.from({ length: 24 }, (_, i) =>
+			callTool(
+				append,
+				i % 3 === 0
+					? { path: "note.md", content: `tail-${i}` }
+					: { path: "note.md", content: `entry-${i}`, heading: "Log" },
+				{ access: i % 2 === 0 ? "full" : "limited" },
+			),
+		);
+		const results = await Promise.allSettled(calls);
+		expect(results.filter((r) => r.status === "rejected")).toEqual([]);
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		for (let i = 0; i < 24; i++) {
+			expect(onDisk).toContain(i % 3 === 0 ? `tail-${i}` : `entry-${i}`);
+		}
+	});
+
+	it("a heading insert ignores a heading-shaped line inside the frontmatter", async () => {
+		const note = "---\n# status\ntitle: x\n---\n\n# status\n\nbody";
+		await writeVaultFile(vaultPath, "note.md", note);
+		const provider = new VaultToolProvider(
+			new VaultService(vaultPath),
+			makeConfig(vaultPath),
+		);
+		await callTool(getTool(provider, "append_to_note"), {
+			path: "note.md",
+			content: "publish: true",
+			heading: "status",
+		});
+		const onDisk = await new VaultService(vaultPath).readFile("note.md");
+		expect(onDisk.startsWith("---\n# status\ntitle: x\n---\n")).toBe(true);
+		expect(onDisk).toBe(
+			"---\n# status\ntitle: x\n---\n\n# status\n\nbody\npublish: true\n",
+		);
+	});
+});
+
+describe("daily-note template spellings", () => {
+	it("reads an extensionless, root-slashed template setting from its .md file", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(
+			vaultPath,
+			"Templates/daily.md",
+			"# {{date}} from template",
+		);
+		const provider = new VaultToolProvider(new VaultService(vaultPath), {
+			...makeConfig(vaultPath),
+			dailyNoteTemplate: "/Templates/daily",
+		} as Config);
+		const text = await callTool(getTool(provider, "daily_note"), {
+			date: "2026-03-01",
+		});
+		expect(text).toContain("# 2026-03-01 from template");
+		await cleanupVault(vaultPath);
+	});
+
+	it("uses the .md template when a folder has the setting's literal name", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(vaultPath, "Templates/daily/stray.md", "x");
+		await writeVaultFile(vaultPath, "Templates/daily.md", "# {{date}} real");
+		const provider = new VaultToolProvider(new VaultService(vaultPath), {
+			...makeConfig(vaultPath),
+			dailyNoteTemplate: "Templates/daily",
+		} as Config);
+		const text = await callTool(getTool(provider, "daily_note"), {
+			date: "2026-03-02",
+		});
+		expect(text).toContain("# 2026-03-02 real");
+		await cleanupVault(vaultPath);
+	});
+
+	it("falls back to the default note when only a folder has the template's name", async () => {
+		const vaultPath = await makeTempVault();
+		await writeVaultFile(vaultPath, "Templates/daily/stray.md", "x");
+		const provider = new VaultToolProvider(new VaultService(vaultPath), {
+			...makeConfig(vaultPath),
+			dailyNoteTemplate: "Templates/daily",
+		} as Config);
+		const text = await callTool(getTool(provider, "daily_note"), {
+			date: "2026-03-03",
+		});
+		expect(text).toContain("# 2026-03-03");
+		expect(text).not.toContain("stray");
+		await cleanupVault(vaultPath);
+	});
+
+	it("lists both spellings unless the setting already ends in .md", () => {
+		expect(templateSpellings("Templates/daily.v2")).toEqual([
+			"Templates/daily.v2.md",
+			"Templates/daily.v2",
+		]);
+		expect(templateSpellings("/T/d.MD")).toEqual(["T/d.MD"]);
+		expect(templateSpellings(undefined)).toEqual([]);
+	});
+});
+
+describe("insertUnderHeading cost and input", () => {
+	it("answers a whitespace-only heading on a long whitespace line fast (no O(n²) backtracking)", () => {
+		// `\s+ \s*$` from heading " " backtracked quadratically: ~15 s at 100 KB.
+		const note = `#${" ".repeat(100_000)}x`;
+		const started = performance.now();
+		expect(() => insertUnderHeading(note, " ", "entry")).toThrow(
+			/non-whitespace/,
+		);
+		insertUnderHeading(note, "x", "entry");
+		expect(performance.now() - started).toBeLessThan(250);
+	});
+
+	it("refuses a whitespace-only heading and trims a padded one", () => {
+		expect(() => insertUnderHeading("## Log\n", "  \t ", "x")).toThrow(
+			/non-whitespace/,
+		);
+		expect(insertUnderHeading("## Log\n\nfirst", "  Log  ", "x")).toBe(
+			"## Log\n\nfirst\nx\n",
+		);
 	});
 });

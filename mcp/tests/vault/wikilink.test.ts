@@ -129,3 +129,12 @@ describe("rewriteWikilinks", () => {
 		expect(out).toBe("[[a]] [[y]]");
 	});
 });
+
+describe("wikilink scanning cost", () => {
+	it("stays linear on a note made of brackets (no O(n²) backtracking)", () => {
+		const started = performance.now();
+		extractWikilinks("[".repeat(100_000));
+		extractWikilinks("[[a".repeat(33_000));
+		expect(performance.now() - started).toBeLessThan(250);
+	});
+});
