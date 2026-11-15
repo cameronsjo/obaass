@@ -21,7 +21,6 @@ import {
 	join,
 	normalize,
 	relative,
-	resolve as resolvePath,
 	sep,
 } from "node:path";
 import { escapeRegex } from "../util.js";
@@ -123,9 +122,13 @@ const MAX_LINK_HOPS = 40;
 
 /**
  * Where a path resolves, or would resolve once created: the real path when it
- * exists; otherwise a dangling final link is followed to its target, and a
- * missing name is joined onto its parent's prospective real path. Throws on
- * any error other than ENOENT/ENOTDIR, and after MAX_LINK_HOPS links.
+ * exists. Otherwise its parent is resolved the same way and the name joined
+ * on; a dangling link there is followed to its target, which is walked one
+ * part at a time from the link's real folder, so `..` applies after each link
+ * is followed, as the kernel does. Throws on any error other than
+ * ENOENT/ENOTDIR, and after MAX_LINK_HOPS links.
+ * debt: the hop cap backs up the kernel's own ELOOP (which realpath already
+ * raises for a loop); no known input reaches it, so no test pins it.
  */
 async function prospectiveRealPath(p: string, hops = 0): Promise<string> {
 	if (hops > MAX_LINK_HOPS) {
@@ -136,20 +139,36 @@ async function prospectiveRealPath(p: string, hops = 0): Promise<string> {
 	} catch (err) {
 		if (!isMissing(err)) throw err;
 	}
+	const parent = dirname(p);
+	if (parent === p) return p;
+	const dir = await prospectiveRealPath(parent, hops);
+	const here = join(dir, basename(p));
 	let isLink: boolean;
 	try {
-		isLink = (await lstat(p)).isSymbolicLink();
+		isLink = (await lstat(here)).isSymbolicLink();
 	} catch (err) {
 		if (!isMissing(err)) throw err;
-		const parent = dirname(p);
-		if (parent === p) return p;
-		return join(await prospectiveRealPath(parent, hops), basename(p));
+		return here;
 	}
-	if (!isLink) return p;
-	return prospectiveRealPath(
-		resolvePath(dirname(p), await readlink(p)),
-		hops + 1,
-	);
+	if (!isLink) return here;
+	return followLinkText(dir, await readlink(here), hops + 1);
+}
+
+/** Resolve a symlink's text from the real folder holding the link. */
+async function followLinkText(
+	dir: string,
+	link: string,
+	hops: number,
+): Promise<string> {
+	let current = isAbsolute(link) ? sep : dir;
+	for (const part of link.split(sep)) {
+		if (part === "" || part === ".") continue;
+		current =
+			part === ".."
+				? dirname(current)
+				: await prospectiveRealPath(join(current, part), hops);
+	}
+	return current;
 }
 
 function isMissing(err: unknown): boolean {

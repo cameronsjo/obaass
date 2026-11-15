@@ -764,6 +764,21 @@ describe("limited write-folder allowlist (MCP_LIMITED_WRITE_DIRS)", () => {
 		await expectTemplateGuard("Tpl/daily", "create_note", "TplReal/daily.md");
 	});
 
+	it("applies `..` in a dangling template link after the linked folder", async () => {
+		await mkdir(join(vaultPath, "Deep", "Tmpl"), { recursive: true });
+		await symlink(join(vaultPath, "Deep", "Tmpl"), join(vaultPath, "T1"));
+		await symlink("../base.md", join(vaultPath, "Deep", "Tmpl", "active.md"));
+		await expectTemplateGuard("T1/active", "create_note", "Deep/base.md");
+	});
+
+	it("applies `..` inside a dangling template link after the link before it", async () => {
+		await mkdir(join(vaultPath, "Deep", "X"), { recursive: true });
+		await mkdir(join(vaultPath, "T2"));
+		await symlink(join(vaultPath, "Deep", "X"), join(vaultPath, "T2", "Lnk"));
+		await symlink("Lnk/../base.md", join(vaultPath, "T2", "active.md"));
+		await expectTemplateGuard("T2/active", "create_note", "Deep/base.md");
+	});
+
 	it("refuses limited writes while the template path cannot be resolved", async () => {
 		await mkdir(join(vaultPath, "Templates"), { recursive: true });
 		await symlink(
